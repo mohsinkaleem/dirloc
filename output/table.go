@@ -9,7 +9,7 @@ import (
 	"github.com/olekukonko/tablewriter"
 	"golang.org/x/term"
 
-	"github.com/dirloc/dirloc/pkg/types"
+	"github.com/dirloc/dirloc/types"
 )
 
 // RenderTable renders results as CLI tables.

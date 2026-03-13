@@ -8,8 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/dirloc/dirloc/internal/analyzer"
-	"github.com/dirloc/dirloc/pkg/types"
+	"github.com/dirloc/dirloc/types"
 )
 
 // Walk traverses the directory tree starting at root, sending file paths to the returned channel.
@@ -64,7 +63,7 @@ func Walk(ctx context.Context, root string, ignore *IgnoreRules, maxFileSize int
 			}
 
 			// Skip non-code files
-			if !analyzer.IsCodeFile(path) {
+			if !IsCodeFile(path) {
 				return nil
 			}
 
@@ -79,11 +78,6 @@ func Walk(ctx context.Context, root string, ignore *IgnoreRules, maxFileSize int
 					warnings <- fmt.Sprintf("warning: skipping %s (%.1f MB exceeds max)", path, float64(info.Size())/(1024*1024))
 					return nil
 				}
-			}
-
-			// Skip binary files
-			if IsBinary(path) {
-				return nil
 			}
 
 			select {
@@ -114,13 +108,19 @@ func ProcessFiles(ctx context.Context, paths <-chan string, config types.ScanCon
 				default:
 				}
 
-				lang := analyzer.DetectLanguage(path)
+				lang := DetectLanguage(path)
+
+				// Skip binary files (checked here to avoid double file-open)
+				if IsBinary(path) {
+					continue
+				}
+
 				var result *types.FileResult
 				if config.ShowLang || config.ShowComplexity {
-					prefixes := analyzer.GetCommentPrefixes(lang)
-					result, _ = analyzer.CountLines(path, lang, prefixes, config.ShowComplexity)
+					prefixes := GetCommentPrefixes(lang)
+					result, _ = CountLines(path, lang, prefixes, config.ShowComplexity)
 				} else {
-					result, _ = analyzer.CountTotalLines(path, lang)
+					result, _ = CountTotalLines(path, lang)
 				}
 
 				// Make path relative to root for cleaner output

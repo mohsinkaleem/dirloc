@@ -7,8 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dirloc/dirloc/internal/analyzer"
-	"github.com/dirloc/dirloc/pkg/types"
+	"github.com/dirloc/dirloc/types"
 )
 
 func TestWalk_BasicDirectory(t *testing.T) {
@@ -63,7 +62,7 @@ func TestWalk_SkipsIgnoredDirs(t *testing.T) {
 	}
 }
 
-func TestWalk_SkipsBinaryFiles(t *testing.T) {
+func TestProcessFiles_SkipsBinaryFiles(t *testing.T) {
 	dir := t.TempDir()
 
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0644)
@@ -78,16 +77,25 @@ func TestWalk_SkipsBinaryFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	go func() {
+		for range warnings {
+		}
+	}()
 
-	var files []string
-	for p := range paths {
-		files = append(files, p)
+	config := types.ScanConfig{
+		RootPath: dir,
+		Workers:  1,
+		ShowLang: false,
 	}
-	for range warnings {
+	results := ProcessFiles(context.Background(), paths, config)
+
+	var all []types.FileResult
+	for r := range results {
+		all = append(all, r)
 	}
 
-	if len(files) != 1 {
-		t.Errorf("expected 1 file (binary should be skipped), got %d", len(files))
+	if len(all) != 1 {
+		t.Errorf("expected 1 result (binary should be skipped), got %d", len(all))
 	}
 }
 
@@ -114,6 +122,38 @@ func TestWalk_MaxFileSize(t *testing.T) {
 
 	if len(files) != 1 {
 		t.Errorf("expected 1 file (large file should be skipped), got %d", len(files))
+	}
+}
+
+func TestWalk_WithDirlocIgnore(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create files
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0644)
+	os.MkdirAll(filepath.Join(dir, "tmp"), 0755)
+	os.WriteFile(filepath.Join(dir, "tmp", "cache.go"), []byte("package tmp\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "debug.log"), []byte("log data\n"), 0644)
+
+	// Create .dirlocignore
+	os.WriteFile(filepath.Join(dir, ".dirlocignore"), []byte("tmp\n*.log\n"), 0644)
+
+	ignore := NewIgnoreRules(nil, nil)
+	ignore.LoadIgnoreFile(filepath.Join(dir, ".dirlocignore"))
+	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var files []string
+	for p := range paths {
+		files = append(files, p)
+	}
+	for range warnings {
+	}
+
+	// Only main.go should be found (tmp/ dir excluded, *.log ext excluded)
+	if len(files) != 1 {
+		t.Errorf("expected 1 file with .dirlocignore, got %d: %v", len(files), files)
 	}
 }
 
@@ -405,18 +445,4 @@ func BenchmarkProcessFiles_1KFiles_Detailed(b *testing.B) {
 		for range results {
 		}
 	}
-}
-
-// init loads the language database for tests
-func init() {
-	// Load the language database
-	data, err := os.ReadFile("../../languages.json")
-	if err != nil {
-		// Try relative path from test
-		data, err = os.ReadFile("../../languages.json")
-		if err != nil {
-			panic("cannot load languages.json for tests: " + err.Error())
-		}
-	}
-	analyzer.InitLanguages(data)
 }

@@ -3,7 +3,7 @@ package aggregator
 import (
 	"testing"
 
-	"github.com/dirloc/dirloc/pkg/types"
+	"github.com/dirloc/dirloc/types"
 )
 
 func makeResults(n int) []types.FileResult {

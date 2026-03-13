@@ -1,4 +1,4 @@
-package analyzer
+package scanner
 
 import (
 	"bufio"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dirloc/dirloc/pkg/types"
+	"github.com/dirloc/dirloc/types"
 )
 
 const defaultMaxBuf = 1024 * 1024 // 1MB line buffer
@@ -15,6 +15,13 @@ const defaultMaxBuf = 1024 * 1024 // 1MB line buffer
 var lineCountBufPool = sync.Pool{
 	New: func() interface{} {
 		buf := make([]byte, 32*1024)
+		return &buf
+	},
+}
+
+var scannerBufPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 0, defaultMaxBuf)
 		return &buf
 	},
 }
@@ -70,11 +77,12 @@ func CountLines(path, lang string, commentPrefixes []string, countComplexity boo
 		Language: lang,
 	}
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, defaultMaxBuf), defaultMaxBuf)
+	bufPtr := scannerBufPool.Get().(*[]byte)
+	s := bufio.NewScanner(f)
+	s.Buffer(*bufPtr, defaultMaxBuf)
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	for s.Scan() {
+		line := s.Text()
 		trimmed := strings.TrimSpace(line)
 
 		if trimmed == "" {
@@ -100,9 +108,12 @@ func CountLines(path, lang string, commentPrefixes []string, countComplexity boo
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
+	if err := s.Err(); err != nil {
 		result.Error = err.Error()
 	}
+
+	*bufPtr = (*bufPtr)[:0] // reset length, keep capacity
+	scannerBufPool.Put(bufPtr)
 
 	result.Total = result.Code + result.Comment + result.Blank
 	return result, nil

@@ -1,4 +1,4 @@
-package analyzer
+package scanner
 
 import (
 	"encoding/json"

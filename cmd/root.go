@@ -5,17 +5,19 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/dirloc/dirloc/internal/aggregator"
-	"github.com/dirloc/dirloc/internal/output"
-	"github.com/dirloc/dirloc/internal/scanner"
-	"github.com/dirloc/dirloc/pkg/types"
+	"github.com/dirloc/dirloc/aggregator"
+	"github.com/dirloc/dirloc/output"
+	"github.com/dirloc/dirloc/scanner"
+	"github.com/dirloc/dirloc/types"
 )
 
 var Version = "dev"
@@ -32,6 +34,7 @@ var (
 	topK           int
 	excludeDirs    []string
 	excludeExts    []string
+	excludeFile    string
 	workers        int
 	showLang       bool
 	showComplexity bool
@@ -41,12 +44,15 @@ var (
 	noTopDirs      bool
 	sortBy         string
 	maxFileSizeStr string
+	cpuProfile     string
+	memProfile     string
 )
 
 func init() {
 	rootCmd.Flags().IntVarP(&topK, "top-k", "k", 10, "Number of top files/dirs to display")
 	rootCmd.Flags().StringSliceVarP(&excludeDirs, "exclude-dir", "e", nil, "Additional directory names to ignore")
 	rootCmd.Flags().StringSliceVar(&excludeExts, "exclude-ext", nil, "Additional file extensions to ignore")
+	rootCmd.Flags().StringVar(&excludeFile, "exclude-file", "", "Path to exclude file (default: .dirlocignore in scanned dir)")
 	rootCmd.Flags().IntVarP(&workers, "workers", "w", runtime.NumCPU(), "Number of parallel worker goroutines")
 	rootCmd.Flags().BoolVarP(&showLang, "lang", "l", false, "Show language breakdown")
 	rootCmd.Flags().BoolVarP(&showComplexity, "complexity", "c", false, "Show complexity column")
@@ -56,6 +62,8 @@ func init() {
 	rootCmd.Flags().BoolVar(&noTopDirs, "no-top-dirs", false, "Suppress top dirs list")
 	rootCmd.Flags().StringVarP(&sortBy, "sort", "s", "code", "Sort by: code, total, files")
 	rootCmd.Flags().StringVar(&maxFileSizeStr, "max-file-size", "10MB", "Skip files larger than this (e.g., 10MB, 500KB)")
+	rootCmd.Flags().StringVar(&cpuProfile, "cpuprofile", "", "Write CPU profile to `file` (analyzed with go tool pprof)")
+	rootCmd.Flags().StringVar(&memProfile, "memprofile", "", "Write memory profile to `file` (analyzed with go tool pprof)")
 
 	rootCmd.Version = Version
 }
@@ -81,6 +89,36 @@ func runScan(cmd *cobra.Command, args []string) error {
 	maxFileSize, err := parseSize(maxFileSizeStr)
 	if err != nil {
 		return fmt.Errorf("invalid --max-file-size %q: %w", maxFileSizeStr, err)
+	}
+
+	// Start CPU profiling before any scan work.
+	if cpuProfile != "" {
+		f, err := os.Create(cpuProfile)
+		if err != nil {
+			return fmt.Errorf("could not create CPU profile %q: %w", cpuProfile, err)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			return fmt.Errorf("could not start CPU profile: %w", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
+	// Heap profile is written after the scan completes (LIFO defer order ensures
+	// this runs before StopCPUProfile so both profiles capture the full run).
+	if memProfile != "" {
+		defer func() {
+			f, err := os.Create(memProfile)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "could not create memory profile %q: %v\n", memProfile, err)
+				return
+			}
+			defer f.Close()
+			runtime.GC()
+			if err := pprof.WriteHeapProfile(f); err != nil {
+				fmt.Fprintf(os.Stderr, "could not write memory profile: %v\n", err)
+			}
+		}()
 	}
 
 	root := "."
@@ -112,6 +150,17 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	// Build ignore rules
 	ignore := scanner.NewIgnoreRules(config.ExcludeDirs, config.ExcludeExts)
+
+	// Load .dirlocignore file
+	ignoreFile := excludeFile
+	if ignoreFile == "" {
+		ignoreFile = filepath.Join(root, ".dirlocignore")
+	}
+	if _, err := os.Stat(ignoreFile); err == nil {
+		if err := ignore.LoadIgnoreFile(ignoreFile); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: cannot read %s: %v\n", ignoreFile, err)
+		}
+	}
 
 	// Walk the directory tree
 	paths, warnings, err := scanner.Walk(ctx, root, ignore, config.MaxFileSize)

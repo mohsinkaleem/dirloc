@@ -131,6 +131,84 @@ func TestIsBinary_NonExistent(t *testing.T) {
 	}
 }
 
+// --- LoadIgnoreFile tests ---
+
+func TestLoadIgnoreFile_Basic(t *testing.T) {
+	dir := t.TempDir()
+	ignoreFile := filepath.Join(dir, ".dirlocignore")
+	content := `# comment line
+tmp
+logs
+*.log
+*.bak
+test_*
+`
+	os.WriteFile(ignoreFile, []byte(content), 0644)
+
+	ir := NewIgnoreRules(nil, nil)
+	if err := ir.LoadIgnoreFile(ignoreFile); err != nil {
+		t.Fatalf("LoadIgnoreFile: %v", err)
+	}
+
+	// Directory rules
+	if !ir.ShouldSkipDir("tmp") {
+		t.Error("expected 'tmp' to be skipped")
+	}
+	if !ir.ShouldSkipDir("logs") {
+		t.Error("expected 'logs' to be skipped")
+	}
+
+	// Extension rules
+	if !ir.ShouldSkipFile("app.log") {
+		t.Error("expected *.log to be skipped")
+	}
+	if !ir.ShouldSkipFile("backup.bak") {
+		t.Error("expected *.bak to be skipped")
+	}
+
+	// Glob pattern rules
+	if !ir.ShouldSkipFile("test_helper.go") {
+		t.Error("expected test_* glob to match")
+	}
+
+	// Should not affect unrelated files
+	if ir.ShouldSkipFile("main.go") {
+		t.Error("main.go should not be skipped")
+	}
+	if ir.ShouldSkipDir("src") {
+		t.Error("src should not be skipped")
+	}
+}
+
+func TestLoadIgnoreFile_EmptyAndComments(t *testing.T) {
+	dir := t.TempDir()
+	ignoreFile := filepath.Join(dir, ".dirlocignore")
+	content := `# just comments
+
+# and blank lines
+
+`
+	os.WriteFile(ignoreFile, []byte(content), 0644)
+
+	ir := NewIgnoreRules(nil, nil)
+	if err := ir.LoadIgnoreFile(ignoreFile); err != nil {
+		t.Fatalf("LoadIgnoreFile: %v", err)
+	}
+
+	// Should only have defaults
+	if !ir.ShouldSkipDir(".git") {
+		t.Error("defaults should still work")
+	}
+}
+
+func TestLoadIgnoreFile_NonExistent(t *testing.T) {
+	ir := NewIgnoreRules(nil, nil)
+	err := ir.LoadIgnoreFile("/nonexistent/.dirlocignore")
+	if err == nil {
+		t.Error("expected error for non-existent file")
+	}
+}
+
 func BenchmarkIsBinary_Text(b *testing.B) {
 	dir := b.TempDir()
 	path := filepath.Join(dir, "text.txt")

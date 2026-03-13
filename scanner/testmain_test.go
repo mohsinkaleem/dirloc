@@ -1,4 +1,4 @@
-package analyzer
+package scanner
 
 import (
 	"os"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	data, err := os.ReadFile("../../languages.json")
+	data, err := os.ReadFile("../languages.json")
 	if err != nil {
 		panic("cannot load languages.json for tests: " + err.Error())
 	}

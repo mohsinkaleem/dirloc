@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dirloc/dirloc/pkg/types"
+	"github.com/dirloc/dirloc/types"
 )
 
 // RenderMarkdown outputs scan results as Markdown tables.

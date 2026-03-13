@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/dirloc/dirloc/pkg/types"
+	"github.com/dirloc/dirloc/types"
 )
 
 // RenderJSON outputs scan results as JSON.

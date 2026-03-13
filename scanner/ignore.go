@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,8 +10,9 @@ import (
 
 // IgnoreRules determines which directories and files to skip.
 type IgnoreRules struct {
-	dirs map[string]bool
-	exts map[string]bool
+	dirs     map[string]bool
+	exts     map[string]bool
+	patterns []string // glob patterns from .dirlocignore
 }
 
 var defaultIgnoreDirs = []string{
@@ -65,12 +67,49 @@ func NewIgnoreRules(extraDirs, extraExts []string) *IgnoreRules {
 	return ir
 }
 
+// LoadIgnoreFile reads a .dirlocignore file and adds its rules.
+// Each non-empty, non-comment line is interpreted as:
+//   - a directory name (e.g. "vendor", "tmp")
+//   - an extension pattern starting with *. (e.g. "*.log")
+//   - a glob pattern for file matching (e.g. "test_*", "*.generated.*")
+//
+// Lines starting with # are comments.
+func (ir *IgnoreRules) LoadIgnoreFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		line := strings.TrimSpace(s.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(line, "*."):
+			// Extension pattern: "*.log" → ".log"
+			ext := strings.ToLower(line[1:]) // strip the "*"
+			ir.exts[ext] = true
+		case !strings.ContainsAny(line, "*?["):
+			// Plain name → treat as directory to skip
+			ir.dirs[line] = true
+		default:
+			// Glob pattern
+			ir.patterns = append(ir.patterns, line)
+		}
+	}
+	return s.Err()
+}
+
 // ShouldSkipDir returns true if the directory name should be skipped.
 func (ir *IgnoreRules) ShouldSkipDir(name string) bool {
 	return ir.dirs[name]
 }
 
-// ShouldSkipFile returns true if the file should be skipped based on extension.
+// ShouldSkipFile returns true if the file should be skipped based on extension or glob patterns.
 func (ir *IgnoreRules) ShouldSkipFile(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	if ir.exts[ext] {
@@ -80,6 +119,12 @@ func (ir *IgnoreRules) ShouldSkipFile(name string) bool {
 	lowerName := strings.ToLower(name)
 	for e := range ir.exts {
 		if strings.Count(e, ".") > 1 && strings.HasSuffix(lowerName, e) {
+			return true
+		}
+	}
+	// Check glob patterns
+	for _, p := range ir.patterns {
+		if matched, _ := filepath.Match(p, name); matched {
 			return true
 		}
 	}
