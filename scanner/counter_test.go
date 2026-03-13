@@ -23,7 +23,7 @@ func main() {
 `
 	os.WriteFile(path, []byte(content), 0644)
 
-	result, err := CountLines(path, "Go", []string{"//"}, false)
+	result, err := CountLines(path, "Go", []string{"//"}, "/*", "*/", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestCountLines_EmptyFile(t *testing.T) {
 	path := filepath.Join(dir, "empty.go")
 	os.WriteFile(path, []byte(""), 0644)
 
-	result, err := CountLines(path, "Go", []string{"//"}, false)
+	result, err := CountLines(path, "Go", []string{"//"}, "/*", "*/", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestCountLines_OnlyBlanks(t *testing.T) {
 	path := filepath.Join(dir, "blank.go")
 	os.WriteFile(path, []byte("\n\n\n"), 0644)
 
-	result, err := CountLines(path, "Go", []string{"//"}, false)
+	result, err := CountLines(path, "Go", []string{"//"}, "/*", "*/", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestCountLines_OnlyComments(t *testing.T) {
 	path := filepath.Join(dir, "comments.py")
 	os.WriteFile(path, []byte("# line1\n# line2\n# line3\n"), 0644)
 
-	result, err := CountLines(path, "Python", []string{"#"}, false)
+	result, err := CountLines(path, "Python", []string{"#"}, `"""`, `"""`, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestCountLines_Complexity(t *testing.T) {
 `
 	os.WriteFile(path, []byte(content), 0644)
 
-	result, err := CountLines(path, "Go", []string{"//"}, true)
+	result, err := CountLines(path, "Go", []string{"//"}, "/*", "*/", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestCountLines_NoTrailingNewline(t *testing.T) {
 	path := filepath.Join(dir, "noeol.go")
 	os.WriteFile(path, []byte("package main"), 0644)
 
-	result, err := CountLines(path, "Go", nil, false)
+	result, err := CountLines(path, "Go", nil, "/*", "*/", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestCountLines_NoTrailingNewline(t *testing.T) {
 }
 
 func TestCountLines_NonExistentFile(t *testing.T) {
-	result, err := CountLines("/nonexistent/file.go", "Go", nil, false)
+	result, err := CountLines("/nonexistent/file.go", "Go", nil, "", "", false)
 	if err == nil {
 		t.Fatal("expected error for nonexistent file")
 	}
@@ -152,7 +152,7 @@ WHERE id = 1;
 `
 	os.WriteFile(path, []byte(content), 0644)
 
-	result, err := CountLines(path, "SQL", []string{"--", "#"}, false)
+	result, err := CountLines(path, "SQL", []string{"--", "#"}, "", "", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -161,6 +161,116 @@ WHERE id = 1;
 	}
 	if result.Code != 2 {
 		t.Errorf("code = %d, want 2", result.Code)
+	}
+}
+
+func TestCountLines_BlockComments(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+	content := `package main
+
+/*
+This is a block comment
+spanning multiple lines
+*/
+func main() {
+	x := 1
+}
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	result, err := CountLines(path, "Go", []string{"//"}, "/*", "*/", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Comment != 4 {
+		t.Errorf("comment = %d, want 4", result.Comment)
+	}
+	if result.Code != 4 {
+		t.Errorf("code = %d, want 4", result.Code)
+	}
+	if result.Blank != 1 {
+		t.Errorf("blank = %d, want 1", result.Blank)
+	}
+}
+
+func TestCountLines_InlineBlockComment(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.c")
+	content := `/* single line block comment */
+int x = 1;
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	result, err := CountLines(path, "C", []string{"//"}, "/*", "*/", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Comment != 1 {
+		t.Errorf("comment = %d, want 1", result.Comment)
+	}
+	if result.Code != 1 {
+		t.Errorf("code = %d, want 1", result.Code)
+	}
+}
+
+func TestCountLines_HTMLBlockComments(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.html")
+	content := `<html>
+<!-- header comment -->
+<body>
+<!--
+multi-line
+comment
+-->
+<p>Hello</p>
+</body>
+</html>
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	result, err := CountLines(path, "HTML", nil, "<!--", "-->", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Comment != 5 {
+		t.Errorf("comment = %d, want 5", result.Comment)
+	}
+	if result.Code != 5 {
+		t.Errorf("code = %d, want 5", result.Code)
+	}
+}
+
+func TestCountLines_BinaryDetection(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "binary.go")
+	data := make([]byte, 100)
+	data[50] = 0 // null byte = binary
+	os.WriteFile(path, data, 0644)
+
+	result, err := CountLines(path, "Go", []string{"//"}, "/*", "*/", false)
+	if err != nil {
+		t.Fatal("expected nil error for binary skip")
+	}
+	if result != nil {
+		t.Error("expected nil result for binary file")
+	}
+}
+
+func TestCountTotalLines_BinaryDetection(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "binary.go")
+	data := make([]byte, 100)
+	data[50] = 0
+	os.WriteFile(path, data, 0644)
+
+	result, err := CountTotalLines(path, "Go")
+	if err != nil {
+		t.Fatal("expected nil error for binary skip")
+	}
+	if result != nil {
+		t.Error("expected nil result for binary file")
 	}
 }
 
@@ -259,7 +369,7 @@ func main() {
 `
 	os.WriteFile(path, []byte(content), 0644)
 
-	detailed, _ := CountLines(path, "Go", []string{"//"}, false)
+	detailed, _ := CountLines(path, "Go", []string{"//"}, "/*", "*/", false)
 	fast, _ := CountTotalLines(path, "Go")
 
 	if detailed.Total != fast.Total {
@@ -318,7 +428,7 @@ func BenchmarkCountLines_Small(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		CountLines(path, "Go", []string{"//"}, false)
+		CountLines(path, "Go", []string{"//"}, "/*", "*/", false)
 	}
 }
 
@@ -347,7 +457,7 @@ func BenchmarkCountLines_Medium(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		CountLines(path, "Go", []string{"//"}, false)
+		CountLines(path, "Go", []string{"//"}, "/*", "*/", false)
 	}
 }
 
@@ -379,7 +489,7 @@ func BenchmarkCountLines_Large(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		CountLines(path, "Go", []string{"//"}, false)
+		CountLines(path, "Go", []string{"//"}, "/*", "*/", false)
 	}
 }
 
@@ -411,6 +521,6 @@ func BenchmarkCountLines_WithComplexity(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		CountLines(path, "Go", []string{"//"}, true)
+		CountLines(path, "Go", []string{"//"}, "/*", "*/", true)
 	}
 }

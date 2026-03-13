@@ -150,8 +150,8 @@ func generateRepo(t testing.TB, root string, numDirs, filesPerDir int) int {
 // runFullPipeline executes Walk → ProcessFiles and returns all FileResults.
 func runFullPipeline(t testing.TB, root string, workers int, showLang bool) []types.FileResult {
 	t.Helper()
-	ignore := NewIgnoreRules(nil, nil)
-	paths, warnings, err := Walk(context.Background(), root, ignore, 10*1024*1024)
+	ignore := NewIgnoreRules(nil, nil, nil)
+	paths, warnings, err := Walk(context.Background(), root, ignore, 10*1024*1024, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
@@ -165,7 +165,7 @@ func runFullPipeline(t testing.TB, root string, workers int, showLang bool) []ty
 		Workers:  workers,
 		ShowLang: showLang,
 	}
-	results := ProcessFiles(context.Background(), paths, cfg)
+	results := ProcessFiles(context.Background(), paths, cfg, nil)
 	var all []types.FileResult
 	for r := range results {
 		all = append(all, r)
@@ -235,8 +235,8 @@ func TestStress_FullPipeline_WithComplexity(t *testing.T) {
 	dir := t.TempDir()
 	want := generateRepo(t, dir, 50, 40) // 2 000 files
 
-	ignore := NewIgnoreRules(nil, nil)
-	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024)
+	ignore := NewIgnoreRules(nil, nil, nil)
+	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestStress_FullPipeline_WithComplexity(t *testing.T) {
 		ShowLang:       true,
 		ShowComplexity: true,
 	}
-	results := ProcessFiles(context.Background(), paths, cfg)
+	results := ProcessFiles(context.Background(), paths, cfg, nil)
 	var all []types.FileResult
 	for r := range results {
 		all = append(all, r)
@@ -280,7 +280,7 @@ func TestStress_FullPipeline_WithComplexity(t *testing.T) {
 func BenchmarkFullPipeline_10KFiles(b *testing.B) {
 	dir := b.TempDir()
 	fileCount := generateRepo(b, dir, 100, 100)
-	ignore := NewIgnoreRules(nil, nil)
+	ignore := NewIgnoreRules(nil, nil, nil)
 	cfg := types.ScanConfig{
 		RootPath: dir,
 		Workers:  runtime.NumCPU(),
@@ -291,12 +291,12 @@ func BenchmarkFullPipeline_10KFiles(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		paths, warnings, _ := Walk(context.Background(), dir, ignore, 10*1024*1024)
+		paths, warnings, _ := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 0)
 		go func() {
 			for range warnings {
 			}
 		}()
-		results := ProcessFiles(context.Background(), paths, cfg)
+		results := ProcessFiles(context.Background(), paths, cfg, nil)
 		for range results {
 		}
 	}
@@ -308,7 +308,7 @@ func BenchmarkFullPipeline_10KFiles(b *testing.B) {
 func BenchmarkFullPipeline_FastPath(b *testing.B) {
 	dir := b.TempDir()
 	fileCount := generateRepo(b, dir, 100, 100)
-	ignore := NewIgnoreRules(nil, nil)
+	ignore := NewIgnoreRules(nil, nil, nil)
 	cfg := types.ScanConfig{
 		RootPath: dir,
 		Workers:  runtime.NumCPU(),
@@ -319,12 +319,12 @@ func BenchmarkFullPipeline_FastPath(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		paths, warnings, _ := Walk(context.Background(), dir, ignore, 10*1024*1024)
+		paths, warnings, _ := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 0)
 		go func() {
 			for range warnings {
 			}
 		}()
-		results := ProcessFiles(context.Background(), paths, cfg)
+		results := ProcessFiles(context.Background(), paths, cfg, nil)
 		for range results {
 		}
 	}
@@ -361,7 +361,7 @@ func BenchmarkWorkerScaling(b *testing.B) {
 					ch <- p
 				}
 				close(ch)
-				results := ProcessFiles(context.Background(), ch, cfg)
+				results := ProcessFiles(context.Background(), ch, cfg, nil)
 				for range results {
 				}
 			}

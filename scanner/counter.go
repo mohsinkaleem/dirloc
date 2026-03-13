@@ -3,6 +3,7 @@ package scanner
 import (
 	"bufio"
 	"bytes"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ var newlineBytes = []byte{'\n'}
 
 // CountTotalLines efficiently counts only total lines without code/comment classification.
 // Uses byte-level newline counting for maximum throughput.
+// It also performs binary detection on the first chunk read.
 func CountTotalLines(path, lang string) (*types.FileResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -43,9 +45,19 @@ func CountTotalLines(path, lang string) (*types.FileResult, error) {
 
 	total := 0
 	trailingNewline := true
+	firstChunk := true
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
+			if firstChunk {
+				firstChunk = false
+				// Binary detection: check for null bytes in first chunk
+				for _, b := range buf[:n] {
+					if b == 0 {
+						return nil, nil // signal: binary file, skip
+					}
+				}
+			}
 			total += bytes.Count(buf[:n], newlineBytes)
 			trailingNewline = buf[n-1] == '\n'
 		}
@@ -64,13 +76,29 @@ func CountTotalLines(path, lang string) (*types.FileResult, error) {
 	}, nil
 }
 
-// CountLines counts code, comment, and blank lines in a file.
-func CountLines(path, lang string, commentPrefixes []string, countComplexity bool) (*types.FileResult, error) {
+// CountLines counts code, comment, blank, and (optionally) block-comment lines in a file.
+// It also performs binary detection on the first 512 bytes.
+func CountLines(path, lang string, commentPrefixes []string, blockStart, blockEnd string, countComplexity bool) (*types.FileResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return &types.FileResult{Path: path, Language: lang, Error: err.Error()}, err
 	}
 	defer f.Close()
+
+	// Binary detection: read first 512 bytes
+	var peekBuf [512]byte
+	n, _ := io.ReadFull(f, peekBuf[:])
+	if n > 0 {
+		for _, b := range peekBuf[:n] {
+			if b == 0 {
+				return nil, nil // binary file, skip
+			}
+		}
+	}
+	// Seek back to start for full scan
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return &types.FileResult{Path: path, Language: lang, Error: err.Error()}, err
+	}
 
 	result := &types.FileResult{
 		Path:     path,
@@ -81,6 +109,9 @@ func CountLines(path, lang string, commentPrefixes []string, countComplexity boo
 	s := bufio.NewScanner(f)
 	s.Buffer(*bufPtr, defaultMaxBuf)
 
+	inBlock := false
+	hasBlockComments := blockStart != "" && blockEnd != ""
+
 	for s.Scan() {
 		line := s.Text()
 		trimmed := strings.TrimSpace(line)
@@ -88,6 +119,24 @@ func CountLines(path, lang string, commentPrefixes []string, countComplexity boo
 		if trimmed == "" {
 			result.Blank++
 			continue
+		}
+
+		// Block comment handling
+		if hasBlockComments {
+			if inBlock {
+				result.Comment++
+				if strings.Contains(trimmed, blockEnd) {
+					inBlock = false
+				}
+				continue
+			}
+			if strings.Contains(trimmed, blockStart) {
+				result.Comment++
+				if !strings.Contains(trimmed, blockEnd) {
+					inBlock = true
+				}
+				continue
+			}
 		}
 
 		isComment := false
@@ -120,42 +169,70 @@ func CountLines(path, lang string, commentPrefixes []string, countComplexity boo
 }
 
 // countBranchKeywords counts branch/loop keywords on a line.
-// Groups related keywords to avoid double-counting overlaps (e.g., "elif" containing "if").
+// Uses case-insensitive contains to avoid per-line string allocation.
 func countBranchKeywords(line string) int {
 	count := 0
-	lower := strings.ToLower(line)
 
 	// Conditional: elif/elsif take priority over if to avoid double-counting
-	if strings.Contains(lower, "elif ") || strings.Contains(lower, "elsif ") {
+	if containsCI(line, "elif ") || containsCI(line, "elsif ") {
 		count++
-	} else if strings.Contains(lower, "if ") || strings.Contains(lower, "if(") || strings.Contains(lower, "unless ") {
+	} else if containsCI(line, "if ") || containsCI(line, "if(") || containsCI(line, "unless ") {
 		count++
 	}
 
-	if strings.Contains(lower, "for ") || strings.Contains(lower, "for(") {
+	if containsCI(line, "for ") || containsCI(line, "for(") {
 		count++
 	}
-	if strings.Contains(lower, "while ") || strings.Contains(lower, "while(") {
+	if containsCI(line, "while ") || containsCI(line, "while(") {
 		count++
 	}
-	if strings.Contains(lower, "switch ") || strings.Contains(lower, "switch(") {
+	if containsCI(line, "switch ") || containsCI(line, "switch(") {
 		count++
 	}
-	if strings.Contains(lower, "case ") {
+	if containsCI(line, "case ") {
 		count++
 	}
-	if strings.Contains(lower, "else ") || strings.Contains(lower, "else{") {
+	if containsCI(line, "else ") || containsCI(line, "else{") {
 		count++
 	}
-	if strings.Contains(lower, "catch ") || strings.Contains(lower, "catch(") {
+	if containsCI(line, "catch ") || containsCI(line, "catch(") {
 		count++
 	}
-	if strings.Contains(lower, "except ") || strings.Contains(lower, "except:") {
+	if containsCI(line, "except ") || containsCI(line, "except:") {
 		count++
 	}
-	if strings.Contains(lower, "? ") {
+	if strings.Contains(line, "? ") {
 		count++
 	}
 
 	return count
+}
+
+// containsCI is a case-insensitive strings.Contains that avoids allocation.
+func containsCI(s, substr string) bool {
+	n := len(substr)
+	if n == 0 {
+		return true
+	}
+	if n > len(s) {
+		return false
+	}
+	for i := 0; i <= len(s)-n; i++ {
+		match := true
+		for j := 0; j < n; j++ {
+			sc := s[i+j]
+			pc := substr[j]
+			if sc >= 'A' && sc <= 'Z' {
+				sc += 'a' - 'A'
+			}
+			if sc != pc {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }

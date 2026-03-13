@@ -131,14 +131,8 @@ func SummaryTotals(results []types.FileResult, dirStats map[string]*types.DirSta
 func fileSortFunc(sortBy string) func([]types.FileResult) func(int, int) bool {
 	return func(items []types.FileResult) func(int, int) bool {
 		switch sortBy {
-		case "total":
-			return func(i, j int) bool {
-				if items[i].Total != items[j].Total {
-					return items[i].Total > items[j].Total
-				}
-				return items[i].Path < items[j].Path
-			}
-		case "files":
+		case "total", "files":
+			// "files" has no meaningful per-file metric; fall through to "total".
 			return func(i, j int) bool {
 				if items[i].Total != items[j].Total {
 					return items[i].Total > items[j].Total

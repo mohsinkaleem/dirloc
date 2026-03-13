@@ -19,8 +19,8 @@ func TestWalk_BasicDirectory(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "sub"), 0755)
 	os.WriteFile(filepath.Join(dir, "sub", "helper.go"), []byte("package sub\n"), 0644)
 
-	ignore := NewIgnoreRules(nil, nil)
-	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024)
+	ignore := NewIgnoreRules(nil, nil, nil)
+	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("Walk failed: %v", err)
 	}
@@ -44,8 +44,8 @@ func TestWalk_SkipsIgnoredDirs(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "node_modules"), 0755)
 	os.WriteFile(filepath.Join(dir, "node_modules", "pkg.js"), []byte("var x;\n"), 0644)
 
-	ignore := NewIgnoreRules(nil, nil)
-	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024)
+	ignore := NewIgnoreRules(nil, nil, nil)
+	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,8 +72,8 @@ func TestProcessFiles_SkipsBinaryFiles(t *testing.T) {
 	binContent[50] = 0 // null byte
 	os.WriteFile(filepath.Join(dir, "data.go"), binContent, 0644)
 
-	ignore := NewIgnoreRules(nil, nil)
-	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024)
+	ignore := NewIgnoreRules(nil, nil, nil)
+	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestProcessFiles_SkipsBinaryFiles(t *testing.T) {
 		Workers:  1,
 		ShowLang: false,
 	}
-	results := ProcessFiles(context.Background(), paths, config)
+	results := ProcessFiles(context.Background(), paths, config, nil)
 
 	var all []types.FileResult
 	for r := range results {
@@ -106,8 +106,8 @@ func TestWalk_MaxFileSize(t *testing.T) {
 	// Create a file larger than 100 bytes
 	os.WriteFile(filepath.Join(dir, "large.go"), make([]byte, 200), 0644)
 
-	ignore := NewIgnoreRules(nil, nil)
-	paths, warnings, err := Walk(context.Background(), dir, ignore, 100)
+	ignore := NewIgnoreRules(nil, nil, nil)
+	paths, warnings, err := Walk(context.Background(), dir, ignore, 100, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,21 +125,15 @@ func TestWalk_MaxFileSize(t *testing.T) {
 	}
 }
 
-func TestWalk_WithDirlocIgnore(t *testing.T) {
+func TestWalk_WithExcludeFiles(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create files
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0644)
-	os.MkdirAll(filepath.Join(dir, "tmp"), 0755)
-	os.WriteFile(filepath.Join(dir, "tmp", "cache.go"), []byte("package tmp\n"), 0644)
-	os.WriteFile(filepath.Join(dir, "debug.log"), []byte("log data\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte("{}"), 0644)
 
-	// Create .dirlocignore
-	os.WriteFile(filepath.Join(dir, ".dirlocignore"), []byte("tmp\n*.log\n"), 0644)
-
-	ignore := NewIgnoreRules(nil, nil)
-	ignore.LoadIgnoreFile(filepath.Join(dir, ".dirlocignore"))
-	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024)
+	ignore := NewIgnoreRules(nil, nil, []string{"config.json"})
+	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,9 +145,35 @@ func TestWalk_WithDirlocIgnore(t *testing.T) {
 	for range warnings {
 	}
 
-	// Only main.go should be found (tmp/ dir excluded, *.log ext excluded)
+	// Only main.go should be found (config.json excluded by name)
 	if len(files) != 1 {
-		t.Errorf("expected 1 file with .dirlocignore, got %d: %v", len(files), files)
+		t.Errorf("expected 1 file with exclude-file, got %d: %v", len(files), files)
+	}
+}
+
+func TestWalk_WithGitignore(t *testing.T) {
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "generated.go"), []byte("package main\n"), 0644)
+	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("generated.go\n"), 0644)
+
+	ignore := NewIgnoreRules(nil, nil, nil)
+	gm := NewGitIgnoreMatcher()
+	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024, gm, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var files []string
+	for p := range paths {
+		files = append(files, p)
+	}
+	for range warnings {
+	}
+
+	if len(files) != 1 {
+		t.Errorf("expected 1 file with .gitignore, got %d: %v", len(files), files)
 	}
 }
 
@@ -168,8 +188,8 @@ func TestWalk_CancelContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	ignore := NewIgnoreRules(nil, nil)
-	paths, warnings, err := Walk(ctx, dir, ignore, 10*1024*1024)
+	ignore := NewIgnoreRules(nil, nil, nil)
+	paths, warnings, err := Walk(ctx, dir, ignore, 10*1024*1024, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,10 +208,58 @@ func TestWalk_CancelContext(t *testing.T) {
 }
 
 func TestWalk_NonExistentDir(t *testing.T) {
-	ignore := NewIgnoreRules(nil, nil)
-	_, _, err := Walk(context.Background(), "/nonexistent/dir", ignore, 10*1024*1024)
+	ignore := NewIgnoreRules(nil, nil, nil)
+	_, _, err := Walk(context.Background(), "/nonexistent/dir", ignore, 10*1024*1024, nil, nil, 0)
 	if err == nil {
 		t.Error("expected error for nonexistent directory")
+	}
+}
+
+func TestWalk_MaxDepth(t *testing.T) {
+	dir := t.TempDir()
+	// Create: dir/a.go, dir/sub1/b.go, dir/sub1/sub2/c.go, dir/sub1/sub2/sub3/d.go
+	os.MkdirAll(filepath.Join(dir, "sub1", "sub2", "sub3"), 0755)
+	os.WriteFile(filepath.Join(dir, "a.go"), []byte("package main\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "sub1", "b.go"), []byte("package sub1\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "sub1", "sub2", "c.go"), []byte("package sub2\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "sub1", "sub2", "sub3", "d.go"), []byte("package sub3\n"), 0644)
+
+	ignore := NewIgnoreRules(nil, nil, nil)
+
+	// Depth 1 should only find a.go and b.go (root level + 1 deep)
+	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for range warnings {
+		}
+	}()
+
+	var files []string
+	for p := range paths {
+		files = append(files, filepath.Base(p))
+	}
+	if len(files) != 2 {
+		t.Errorf("depth=1: got %d files %v, want 2 (a.go, b.go)", len(files), files)
+	}
+
+	// Depth 0 (unlimited) should find all 4
+	paths2, warnings2, err := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for range warnings2 {
+		}
+	}()
+
+	files = nil
+	for p := range paths2 {
+		files = append(files, filepath.Base(p))
+	}
+	if len(files) != 4 {
+		t.Errorf("depth=0: got %d files %v, want 4", len(files), files)
 	}
 }
 
@@ -214,7 +282,7 @@ func TestProcessFiles_Basic(t *testing.T) {
 		ShowComplexity: false,
 	}
 
-	results := ProcessFiles(context.Background(), paths, config)
+	results := ProcessFiles(context.Background(), paths, config, nil)
 
 	var all []types.FileResult
 	for r := range results {
@@ -250,7 +318,7 @@ func TestProcessFiles_FastPath(t *testing.T) {
 		ShowLang: false, // fast path
 	}
 
-	results := ProcessFiles(context.Background(), paths, config)
+	results := ProcessFiles(context.Background(), paths, config, nil)
 
 	var all []types.FileResult
 	for r := range results {
@@ -294,8 +362,8 @@ func TestStress_LargeDirectoryTree(t *testing.T) {
 		}
 	}
 
-	ignore := NewIgnoreRules(nil, nil)
-	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024)
+	ignore := NewIgnoreRules(nil, nil, nil)
+	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +379,7 @@ func TestStress_LargeDirectoryTree(t *testing.T) {
 		ShowLang: false,
 	}
 
-	results := ProcessFiles(context.Background(), paths, config)
+	results := ProcessFiles(context.Background(), paths, config, nil)
 
 	var all []types.FileResult
 	for r := range results {
@@ -348,8 +416,8 @@ func TestStress_DeeplyNestedDirectories(t *testing.T) {
 		os.WriteFile(filepath.Join(current, "file.go"), []byte("package main\n"), 0644)
 	}
 
-	ignore := NewIgnoreRules(nil, nil)
-	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024)
+	ignore := NewIgnoreRules(nil, nil, nil)
+	paths, warnings, err := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,12 +442,12 @@ func BenchmarkWalk_1KFiles(b *testing.B) {
 		os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%d.go", i)), []byte("package main\n"), 0644)
 	}
 
-	ignore := NewIgnoreRules(nil, nil)
+	ignore := NewIgnoreRules(nil, nil, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		paths, warnings, _ := Walk(context.Background(), dir, ignore, 10*1024*1024)
+		paths, warnings, _ := Walk(context.Background(), dir, ignore, 10*1024*1024, nil, nil, 0)
 		for range paths {
 		}
 		for range warnings {
@@ -411,7 +479,7 @@ func BenchmarkProcessFiles_1KFiles(b *testing.B) {
 		}
 		close(paths)
 
-		results := ProcessFiles(context.Background(), paths, config)
+		results := ProcessFiles(context.Background(), paths, config, nil)
 		for range results {
 		}
 	}
@@ -441,7 +509,7 @@ func BenchmarkProcessFiles_1KFiles_Detailed(b *testing.B) {
 		}
 		close(paths)
 
-		results := ProcessFiles(context.Background(), paths, config)
+		results := ProcessFiles(context.Background(), paths, config, nil)
 		for range results {
 		}
 	}

@@ -49,6 +49,9 @@ type ScanConfig struct {
 	RootPath       string
 	ExcludeDirs    []string
 	ExcludeExts    []string
+	ExcludeFiles   []string
+	IncludeExts    []string
+	IncludeLangs   []string
 	Workers        int
 	TopK           int
 	ShowLang       bool
@@ -59,6 +62,10 @@ type ScanConfig struct {
 	NoTopDirs      bool
 	SortBy         string
 	MaxFileSize    int64
+	UseGitignore   bool
+	UseCache       bool
+	NoProgress     bool
+	MaxDepth       int
 }
 
 // ScanOutput wraps all output data for JSON/MD rendering.

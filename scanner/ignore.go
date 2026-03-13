@@ -1,18 +1,19 @@
 package scanner
 
 import (
-	"bufio"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 )
 
-// IgnoreRules determines which directories and files to skip.
+// IgnoreRules determines which directories, files, and extensions to skip.
 type IgnoreRules struct {
-	dirs     map[string]bool
-	exts     map[string]bool
-	patterns []string // glob patterns from .dirlocignore
+	dirs         map[string]bool
+	exts         map[string]bool
+	files        map[string]bool
+	compoundExts []string // pre-computed compound extensions like .min.js
+	fileGlobs    []string // glob patterns for file exclusion
 }
 
 var defaultIgnoreDirs = []string{
@@ -20,7 +21,7 @@ var defaultIgnoreDirs = []string{
 	"node_modules", ".venv", "venv", "__pycache__",
 	".tox", ".mypy_cache", ".pytest_cache",
 	"vendor", "dist", "build", ".next", ".nuxt",
-	".gradle", ".idea", ".vscode", ".DS_Store",
+	".gradle", ".idea", ".vscode",
 	"target", "bin", "obj", ".terraform",
 	".cache", ".eggs", ".bundle", "coverage",
 	".angular", ".sass-cache",
@@ -39,11 +40,19 @@ var defaultIgnoreExts = []string{
 	".db", ".sqlite", ".sqlite3",
 }
 
+var defaultIgnoreFiles = []string{
+	"package-lock.json",
+	"pnpm-lock.yaml",
+	".DS_Store",
+	".dirlocache",
+}
+
 // NewIgnoreRules creates an IgnoreRules with built-in defaults plus extras.
-func NewIgnoreRules(extraDirs, extraExts []string) *IgnoreRules {
+func NewIgnoreRules(extraDirs, extraExts, extraFiles []string) *IgnoreRules {
 	ir := &IgnoreRules{
-		dirs: make(map[string]bool),
-		exts: make(map[string]bool),
+		dirs:  make(map[string]bool),
+		exts:  make(map[string]bool),
+		files: make(map[string]bool),
 	}
 
 	for _, d := range defaultIgnoreDirs {
@@ -64,44 +73,26 @@ func NewIgnoreRules(extraDirs, extraExts []string) *IgnoreRules {
 		ir.exts[strings.ToLower(ext)] = true
 	}
 
+	for _, f := range defaultIgnoreFiles {
+		ir.files[f] = true
+	}
+	for _, f := range extraFiles {
+		// Check if it looks like a glob pattern
+		if strings.ContainsAny(f, "*?[") {
+			ir.fileGlobs = append(ir.fileGlobs, f)
+		} else {
+			ir.files[f] = true
+		}
+	}
+
+	// Pre-compute compound extensions for O(1)-ish lookup
+	for e := range ir.exts {
+		if strings.Count(e, ".") > 1 {
+			ir.compoundExts = append(ir.compoundExts, e)
+		}
+	}
+
 	return ir
-}
-
-// LoadIgnoreFile reads a .dirlocignore file and adds its rules.
-// Each non-empty, non-comment line is interpreted as:
-//   - a directory name (e.g. "vendor", "tmp")
-//   - an extension pattern starting with *. (e.g. "*.log")
-//   - a glob pattern for file matching (e.g. "test_*", "*.generated.*")
-//
-// Lines starting with # are comments.
-func (ir *IgnoreRules) LoadIgnoreFile(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		line := strings.TrimSpace(s.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		switch {
-		case strings.HasPrefix(line, "*."):
-			// Extension pattern: "*.log" → ".log"
-			ext := strings.ToLower(line[1:]) // strip the "*"
-			ir.exts[ext] = true
-		case !strings.ContainsAny(line, "*?["):
-			// Plain name → treat as directory to skip
-			ir.dirs[line] = true
-		default:
-			// Glob pattern
-			ir.patterns = append(ir.patterns, line)
-		}
-	}
-	return s.Err()
 }
 
 // ShouldSkipDir returns true if the directory name should be skipped.
@@ -109,22 +100,27 @@ func (ir *IgnoreRules) ShouldSkipDir(name string) bool {
 	return ir.dirs[name]
 }
 
-// ShouldSkipFile returns true if the file should be skipped based on extension or glob patterns.
+// ShouldSkipFile returns true if the file should be skipped based on name, extension, or glob pattern.
 func (ir *IgnoreRules) ShouldSkipFile(name string) bool {
+	if ir.files[name] {
+		return true
+	}
 	ext := strings.ToLower(filepath.Ext(name))
 	if ir.exts[ext] {
 		return true
 	}
-	// Check compound extensions like .min.js, .min.css
-	lowerName := strings.ToLower(name)
-	for e := range ir.exts {
-		if strings.Count(e, ".") > 1 && strings.HasSuffix(lowerName, e) {
-			return true
+	// Check pre-computed compound extensions like .min.js, .min.css
+	if len(ir.compoundExts) > 0 {
+		lowerName := strings.ToLower(name)
+		for _, e := range ir.compoundExts {
+			if strings.HasSuffix(lowerName, e) {
+				return true
+			}
 		}
 	}
 	// Check glob patterns
-	for _, p := range ir.patterns {
-		if matched, _ := filepath.Match(p, name); matched {
+	for _, pattern := range ir.fileGlobs {
+		if matched, _ := filepath.Match(pattern, name); matched {
 			return true
 		}
 	}

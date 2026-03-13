@@ -7,9 +7,10 @@ import (
 )
 
 type languageDB struct {
-	Extensions map[string]string   `json:"extensions"`
-	Filenames  map[string]string   `json:"filenames"`
-	Comments   map[string][]string `json:"comments"`
+	Extensions    map[string]string   `json:"extensions"`
+	Filenames     map[string]string   `json:"filenames"`
+	Comments      map[string][]string `json:"comments"`
+	BlockComments map[string][]string `json:"blockComments"`
 }
 
 var langDB languageDB
@@ -45,6 +46,15 @@ func GetCommentPrefixes(lang string) []string {
 		return prefixes
 	}
 	return nil
+}
+
+// GetBlockCommentDelimiters returns the block comment start/end for a language.
+// Returns empty strings if the language has no block comments.
+func GetBlockCommentDelimiters(lang string) (string, string) {
+	if delims, ok := langDB.BlockComments[lang]; ok && len(delims) == 2 {
+		return delims[0], delims[1]
+	}
+	return "", ""
 }
 
 // IsCodeFile returns true if the file maps to a known language.

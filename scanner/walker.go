@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/dirloc/dirloc/types"
@@ -13,7 +14,10 @@ import (
 
 // Walk traverses the directory tree starting at root, sending file paths to the returned channel.
 // It skips directories and files according to the ignore rules and only sends code files.
-func Walk(ctx context.Context, root string, ignore *IgnoreRules, maxFileSize int64) (<-chan string, <-chan string, error) {
+// If gitMatcher is non-nil, .gitignore files are loaded and honoured.
+// If progress is non-nil, it is incremented for every file emitted.
+// maxDepth limits traversal depth (0 = unlimited).
+func Walk(ctx context.Context, root string, ignore *IgnoreRules, maxFileSize int64, gitMatcher *GitIgnoreMatcher, progress *Progress, maxDepth int) (<-chan string, <-chan string, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cannot access %s: %w", root, err)
@@ -47,6 +51,15 @@ func Walk(ctx context.Context, root string, ignore *IgnoreRules, maxFileSize int
 			name := d.Name()
 
 			if d.IsDir() {
+				// Enforce --depth limit
+				if maxDepth > 0 && path != root {
+					rel, _ := filepath.Rel(root, path)
+					depth := strings.Count(rel, string(filepath.Separator)) + 1
+					if depth > maxDepth {
+						return fs.SkipDir
+					}
+				}
+
 				if path != root && ignore.ShouldSkipDir(name) {
 					return fs.SkipDir
 				}
@@ -54,11 +67,24 @@ func Walk(ctx context.Context, root string, ignore *IgnoreRules, maxFileSize int
 				if d.Type()&fs.ModeSymlink != 0 {
 					return fs.SkipDir
 				}
+				// Load .gitignore for this directory if enabled
+				if gitMatcher != nil {
+					gitMatcher.LoadDir(path)
+				}
+				// Check gitignore rules on the directory itself
+				if gitMatcher != nil && path != root && gitMatcher.ShouldIgnore(path, true) {
+					return fs.SkipDir
+				}
 				return nil
 			}
 
-			// Skip ignored extensions
+			// Skip ignored files by name
 			if ignore.ShouldSkipFile(name) {
+				return nil
+			}
+
+			// Skip gitignored files
+			if gitMatcher != nil && gitMatcher.ShouldIgnore(path, false) {
 				return nil
 			}
 
@@ -80,6 +106,8 @@ func Walk(ctx context.Context, root string, ignore *IgnoreRules, maxFileSize int
 				}
 			}
 
+			progress.Inc()
+
 			select {
 			case paths <- path:
 			case <-ctx.Done():
@@ -93,8 +121,12 @@ func Walk(ctx context.Context, root string, ignore *IgnoreRules, maxFileSize int
 }
 
 // ProcessFiles spawns worker goroutines to analyze files from the paths channel.
-func ProcessFiles(ctx context.Context, paths <-chan string, config types.ScanConfig) <-chan types.FileResult {
+// If cache is non-nil, workers check it before reading files and store results.
+func ProcessFiles(ctx context.Context, paths <-chan string, config types.ScanConfig, cache *Cache) <-chan types.FileResult {
 	results := make(chan types.FileResult, 256)
+
+	needDetailed := config.ShowLang || config.ShowComplexity
+	needComplexity := config.ShowComplexity
 
 	var wg sync.WaitGroup
 	for i := 0; i < config.Workers; i++ {
@@ -110,22 +142,53 @@ func ProcessFiles(ctx context.Context, paths <-chan string, config types.ScanCon
 
 				lang := DetectLanguage(path)
 
-				// Skip binary files (checked here to avoid double file-open)
-				if IsBinary(path) {
-					continue
+				// Make path relative to root for cleaner output
+				relPath := path
+				if rel, err := filepath.Rel(config.RootPath, path); err == nil {
+					relPath = rel
+				}
+
+				// Stat once and reuse for cache lookup/store
+				var fileInfo os.FileInfo
+				if cache != nil {
+					fi, err := os.Stat(path)
+					if err == nil {
+						fileInfo = fi
+						if cached, ok := cache.Lookup(relPath, fi.ModTime().UnixNano(), fi.Size(), needDetailed, needComplexity); ok {
+							select {
+							case results <- *cached:
+							case <-ctx.Done():
+								return
+							}
+							continue
+						}
+					}
 				}
 
 				var result *types.FileResult
-				if config.ShowLang || config.ShowComplexity {
+				if needDetailed {
 					prefixes := GetCommentPrefixes(lang)
-					result, _ = CountLines(path, lang, prefixes, config.ShowComplexity)
+					blockStart, blockEnd := GetBlockCommentDelimiters(lang)
+					result, _ = CountLines(path, lang, prefixes, blockStart, blockEnd, needComplexity)
 				} else {
 					result, _ = CountTotalLines(path, lang)
 				}
 
-				// Make path relative to root for cleaner output
-				if rel, err := filepath.Rel(config.RootPath, result.Path); err == nil {
-					result.Path = rel
+				// nil result means binary file detected inside count function
+				if result == nil {
+					continue
+				}
+
+				result.Path = relPath
+
+				// Store in cache (reuse fileInfo if available)
+				if cache != nil {
+					if fileInfo == nil {
+						fileInfo, _ = os.Stat(path)
+					}
+					if fileInfo != nil {
+						cache.Store(relPath, fileInfo.ModTime().UnixNano(), fileInfo.Size(), needDetailed, needComplexity, *result)
+					}
 				}
 
 				select {

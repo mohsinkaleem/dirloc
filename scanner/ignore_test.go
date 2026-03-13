@@ -9,7 +9,7 @@ import (
 // --- IgnoreRules tests ---
 
 func TestNewIgnoreRules_DefaultDirs(t *testing.T) {
-	ir := NewIgnoreRules(nil, nil)
+	ir := NewIgnoreRules(nil, nil, nil)
 
 	defaults := []string{".git", "node_modules", "__pycache__", "vendor", ".vscode"}
 	for _, d := range defaults {
@@ -20,7 +20,7 @@ func TestNewIgnoreRules_DefaultDirs(t *testing.T) {
 }
 
 func TestNewIgnoreRules_ExtraDirs(t *testing.T) {
-	ir := NewIgnoreRules([]string{"custom_dir"}, nil)
+	ir := NewIgnoreRules([]string{"custom_dir"}, nil, nil)
 
 	if !ir.ShouldSkipDir("custom_dir") {
 		t.Error("expected custom_dir to be skipped")
@@ -31,7 +31,7 @@ func TestNewIgnoreRules_ExtraDirs(t *testing.T) {
 }
 
 func TestShouldSkipFile_SimpleExtension(t *testing.T) {
-	ir := NewIgnoreRules(nil, nil)
+	ir := NewIgnoreRules(nil, nil, nil)
 
 	tests := []struct {
 		name string
@@ -54,7 +54,7 @@ func TestShouldSkipFile_SimpleExtension(t *testing.T) {
 }
 
 func TestShouldSkipFile_CompoundExtension(t *testing.T) {
-	ir := NewIgnoreRules(nil, nil)
+	ir := NewIgnoreRules(nil, nil, nil)
 
 	// .min.js and .min.css should be skipped
 	if !ir.ShouldSkipFile("jquery.min.js") {
@@ -70,7 +70,7 @@ func TestShouldSkipFile_CompoundExtension(t *testing.T) {
 }
 
 func TestShouldSkipFile_ExtraExtensions(t *testing.T) {
-	ir := NewIgnoreRules(nil, []string{"log", ".bak"})
+	ir := NewIgnoreRules(nil, []string{"log", ".bak"}, nil)
 
 	if !ir.ShouldSkipFile("app.log") {
 		t.Error("expected .log to be skipped (extra extension)")
@@ -81,13 +81,67 @@ func TestShouldSkipFile_ExtraExtensions(t *testing.T) {
 }
 
 func TestShouldSkipFile_CaseInsensitive(t *testing.T) {
-	ir := NewIgnoreRules(nil, nil)
+	ir := NewIgnoreRules(nil, nil, nil)
 
 	if !ir.ShouldSkipFile("FILE.EXE") {
 		t.Error("expected FILE.EXE to be skipped (case insensitive)")
 	}
 	if !ir.ShouldSkipFile("image.PNG") {
 		t.Error("expected image.PNG to be skipped (case insensitive)")
+	}
+}
+
+func TestShouldSkipFile_BuiltInFiles(t *testing.T) {
+	ir := NewIgnoreRules(nil, nil, nil)
+
+	if !ir.ShouldSkipFile("package-lock.json") {
+		t.Error("expected package-lock.json to be skipped by default")
+	}
+	if !ir.ShouldSkipFile("pnpm-lock.yaml") {
+		t.Error("expected pnpm-lock.yaml to be skipped by default")
+	}
+	if !ir.ShouldSkipFile(".DS_Store") {
+		t.Error("expected .DS_Store to be skipped by default")
+	}
+	if !ir.ShouldSkipFile(".dirlocache") {
+		t.Error("expected .dirlocache to be skipped by default")
+	}
+}
+
+func TestShouldSkipFile_ExtraFiles(t *testing.T) {
+	ir := NewIgnoreRules(nil, nil, []string{"config.json", "secrets.yaml"})
+
+	if !ir.ShouldSkipFile("config.json") {
+		t.Error("expected config.json to be skipped (extra file)")
+	}
+	if !ir.ShouldSkipFile("secrets.yaml") {
+		t.Error("expected secrets.yaml to be skipped (extra file)")
+	}
+	if ir.ShouldSkipFile("main.go") {
+		t.Error("main.go should not be skipped")
+	}
+}
+
+func TestShouldSkipFile_GlobPatterns(t *testing.T) {
+	ir := NewIgnoreRules(nil, nil, []string{"*_test.go", "test_*.py"})
+
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"main_test.go", true},
+		{"handler_test.go", true},
+		{"test_utils.py", true},
+		{"test_main.py", true},
+		{"main.go", false},
+		{"utils.py", false},
+	}
+
+	for _, tt := range tests {
+		got := ir.ShouldSkipFile(tt.name)
+		if got != tt.want {
+			t.Errorf("ShouldSkipFile(%q) = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }
 
@@ -131,84 +185,6 @@ func TestIsBinary_NonExistent(t *testing.T) {
 	}
 }
 
-// --- LoadIgnoreFile tests ---
-
-func TestLoadIgnoreFile_Basic(t *testing.T) {
-	dir := t.TempDir()
-	ignoreFile := filepath.Join(dir, ".dirlocignore")
-	content := `# comment line
-tmp
-logs
-*.log
-*.bak
-test_*
-`
-	os.WriteFile(ignoreFile, []byte(content), 0644)
-
-	ir := NewIgnoreRules(nil, nil)
-	if err := ir.LoadIgnoreFile(ignoreFile); err != nil {
-		t.Fatalf("LoadIgnoreFile: %v", err)
-	}
-
-	// Directory rules
-	if !ir.ShouldSkipDir("tmp") {
-		t.Error("expected 'tmp' to be skipped")
-	}
-	if !ir.ShouldSkipDir("logs") {
-		t.Error("expected 'logs' to be skipped")
-	}
-
-	// Extension rules
-	if !ir.ShouldSkipFile("app.log") {
-		t.Error("expected *.log to be skipped")
-	}
-	if !ir.ShouldSkipFile("backup.bak") {
-		t.Error("expected *.bak to be skipped")
-	}
-
-	// Glob pattern rules
-	if !ir.ShouldSkipFile("test_helper.go") {
-		t.Error("expected test_* glob to match")
-	}
-
-	// Should not affect unrelated files
-	if ir.ShouldSkipFile("main.go") {
-		t.Error("main.go should not be skipped")
-	}
-	if ir.ShouldSkipDir("src") {
-		t.Error("src should not be skipped")
-	}
-}
-
-func TestLoadIgnoreFile_EmptyAndComments(t *testing.T) {
-	dir := t.TempDir()
-	ignoreFile := filepath.Join(dir, ".dirlocignore")
-	content := `# just comments
-
-# and blank lines
-
-`
-	os.WriteFile(ignoreFile, []byte(content), 0644)
-
-	ir := NewIgnoreRules(nil, nil)
-	if err := ir.LoadIgnoreFile(ignoreFile); err != nil {
-		t.Fatalf("LoadIgnoreFile: %v", err)
-	}
-
-	// Should only have defaults
-	if !ir.ShouldSkipDir(".git") {
-		t.Error("defaults should still work")
-	}
-}
-
-func TestLoadIgnoreFile_NonExistent(t *testing.T) {
-	ir := NewIgnoreRules(nil, nil)
-	err := ir.LoadIgnoreFile("/nonexistent/.dirlocignore")
-	if err == nil {
-		t.Error("expected error for non-existent file")
-	}
-}
-
 func BenchmarkIsBinary_Text(b *testing.B) {
 	dir := b.TempDir()
 	path := filepath.Join(dir, "text.txt")
@@ -222,7 +198,7 @@ func BenchmarkIsBinary_Text(b *testing.B) {
 }
 
 func BenchmarkShouldSkipFile(b *testing.B) {
-	ir := NewIgnoreRules(nil, nil)
+	ir := NewIgnoreRules(nil, nil, nil)
 	names := []string{"main.go", "file.exe", "jquery.min.js", "app.py", "data.zip"}
 
 	b.ResetTimer()
@@ -233,7 +209,7 @@ func BenchmarkShouldSkipFile(b *testing.B) {
 }
 
 func BenchmarkShouldSkipDir(b *testing.B) {
-	ir := NewIgnoreRules(nil, nil)
+	ir := NewIgnoreRules(nil, nil, nil)
 	names := []string{"src", ".git", "node_modules", "lib", "vendor"}
 
 	b.ResetTimer()
