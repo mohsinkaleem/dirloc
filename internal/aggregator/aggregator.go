@@ -132,11 +132,29 @@ func fileSortFunc(sortBy string) func([]types.FileResult) func(int, int) bool {
 	return func(items []types.FileResult) func(int, int) bool {
 		switch sortBy {
 		case "total":
-			return func(i, j int) bool { return items[i].Total > items[j].Total }
+			return func(i, j int) bool {
+				if items[i].Total != items[j].Total {
+					return items[i].Total > items[j].Total
+				}
+				return items[i].Path < items[j].Path
+			}
 		case "files":
-			return func(i, j int) bool { return items[i].Code > items[j].Code }
+			return func(i, j int) bool {
+				if items[i].Total != items[j].Total {
+					return items[i].Total > items[j].Total
+				}
+				return items[i].Path < items[j].Path
+			}
 		default: // "code"
-			return func(i, j int) bool { return items[i].Code > items[j].Code }
+			return func(i, j int) bool {
+				if items[i].Code != items[j].Code {
+					return items[i].Code > items[j].Code
+				}
+				if items[i].Total != items[j].Total {
+					return items[i].Total > items[j].Total
+				}
+				return items[i].Path < items[j].Path
+			}
 		}
 	}
 }
@@ -145,11 +163,29 @@ func dirSortFunc(sortBy string) func([]types.DirStats) func(int, int) bool {
 	return func(items []types.DirStats) func(int, int) bool {
 		switch sortBy {
 		case "total":
-			return func(i, j int) bool { return items[i].Total > items[j].Total }
+			return func(i, j int) bool {
+				if items[i].Total != items[j].Total {
+					return items[i].Total > items[j].Total
+				}
+				return items[i].Path < items[j].Path
+			}
 		case "files":
-			return func(i, j int) bool { return items[i].Files > items[j].Files }
+			return func(i, j int) bool {
+				if items[i].Files != items[j].Files {
+					return items[i].Files > items[j].Files
+				}
+				return items[i].Path < items[j].Path
+			}
 		default: // "code"
-			return func(i, j int) bool { return items[i].Code > items[j].Code }
+			return func(i, j int) bool {
+				if items[i].Code != items[j].Code {
+					return items[i].Code > items[j].Code
+				}
+				if items[i].Total != items[j].Total {
+					return items[i].Total > items[j].Total
+				}
+				return items[i].Path < items[j].Path
+			}
 		}
 	}
 }

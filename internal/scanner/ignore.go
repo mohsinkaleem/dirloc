@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // IgnoreRules determines which directories and files to skip.
@@ -72,7 +73,24 @@ func (ir *IgnoreRules) ShouldSkipDir(name string) bool {
 // ShouldSkipFile returns true if the file should be skipped based on extension.
 func (ir *IgnoreRules) ShouldSkipFile(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
-	return ir.exts[ext]
+	if ir.exts[ext] {
+		return true
+	}
+	// Check compound extensions like .min.js, .min.css
+	lowerName := strings.ToLower(name)
+	for e := range ir.exts {
+		if strings.Count(e, ".") > 1 && strings.HasSuffix(lowerName, e) {
+			return true
+		}
+	}
+	return false
+}
+
+var binaryCheckPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 512)
+		return &buf
+	},
 }
 
 // IsBinary reads the first 512 bytes and checks for null bytes.
@@ -83,7 +101,10 @@ func IsBinary(path string) bool {
 	}
 	defer f.Close()
 
-	buf := make([]byte, 512)
+	bufPtr := binaryCheckPool.Get().(*[]byte)
+	defer binaryCheckPool.Put(bufPtr)
+	buf := *bufPtr
+
 	n, err := f.Read(buf)
 	if err != nil || n == 0 {
 		return false

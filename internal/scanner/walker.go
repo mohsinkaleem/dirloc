@@ -115,8 +115,13 @@ func ProcessFiles(ctx context.Context, paths <-chan string, config types.ScanCon
 				}
 
 				lang := analyzer.DetectLanguage(path)
-				prefixes := analyzer.GetCommentPrefixes(lang)
-				result, _ := analyzer.CountLines(path, lang, prefixes, config.ShowComplexity)
+				var result *types.FileResult
+				if config.ShowLang || config.ShowComplexity {
+					prefixes := analyzer.GetCommentPrefixes(lang)
+					result, _ = analyzer.CountLines(path, lang, prefixes, config.ShowComplexity)
+				} else {
+					result, _ = analyzer.CountTotalLines(path, lang)
+				}
 
 				// Make path relative to root for cleaner output
 				if rel, err := filepath.Rel(config.RootPath, result.Path); err == nil {
