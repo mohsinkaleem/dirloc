@@ -91,7 +91,7 @@ func renderTopDirsMarkdown(dirs []types.DirStats, config types.ScanConfig) {
 	if config.ShowLang {
 		fmt.Print(" Code |")
 	}
-	fmt.Println(" Total |")
+	fmt.Println(" Lines |")
 
 	// Alignment
 	fmt.Print("|---:|:---|---:|")
@@ -114,7 +114,7 @@ func renderTopDirsMarkdown(dirs []types.DirStats, config types.ScanConfig) {
 func renderLangMarkdown(langs []types.LangSummary) {
 	fmt.Println("## Language Breakdown")
 	fmt.Println()
-	fmt.Println("| Language | Files | Code | Comment | Blank | Total |")
+	fmt.Println("| Language | Files | Code | Comment | Blank | Lines |")
 	fmt.Println("|:---|---:|---:|---:|---:|---:|")
 
 	for _, l := range langs {
