@@ -1,5 +1,6 @@
 dirloc
 bin/
+dist/
 .DS_Store
 *.log
 *.tmp

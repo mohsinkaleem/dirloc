@@ -1,8 +1,27 @@
 # dirloc
 
+[![CI](https://github.com/mohsinkaleem/dirloc/actions/workflows/ci.yml/badge.svg)](https://github.com/mohsinkaleem/dirloc/actions/workflows/ci.yml)
+[![Release](https://github.com/mohsinkaleem/dirloc/actions/workflows/release.yml/badge.svg)](https://github.com/mohsinkaleem/dirloc/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A fast CLI tool that recursively scans a directory tree, counts lines of code, and reports top files/directories by size.
 
+![dirloc screenshot](https://raw.githubusercontent.com/mohsinkaleem/dirloc/main/.github/dirloc-view.png)
+
+
 ## Install
+
+### Homebrew (macOS & Linux)
+
+```bash
+brew install mohsinkaleem/tap/dirloc
+```
+
+### Download Binary
+
+Download a prebuilt binary from the [Releases](https://github.com/mohsinkaleem/dirloc/releases) page.
+
+### From Source
 
 ```bash
 go install github.com/dirloc/dirloc@latest
@@ -14,11 +33,49 @@ go install github.com/dirloc/dirloc@latest
 dirloc [path] [flags]
 ```
 
+
+
 ### Examples
 
 ```bash
 # Scan current directory
 dirloc
+➜  dirloc git:(main) dirloc
+
+dirloc — scanned 31 files (5 languages) in 9 directories [29ms]
+
+Top 10 Files by Total Lines
++------+-------------------------------+----------+-------+
+| RANK |             FILE              | LANGUAGE | LINES |
++------+-------------------------------+----------+-------+
+|    1 | scanner/counter_test.go       | Go       |   526 |
+|    2 | scanner/walker_test.go        | Go       |   516 |
+|    3 | scanner/bench_test.go         | Go       |   390 |
+|    4 | aggregator/aggregator_test.go | Go       |   349 |
+|    5 | cmd/root.go                   | Go       |   318 |
+|    6 | languages.json                | JSON     |   295 |
+|    7 | output/table.go               | Go       |   258 |
+|    8 | scanner/counter.go            | Go       |   238 |
+|    9 | scanner/ignore_test.go        | Go       |   220 |
+|   10 | scanner/walker.go             | Go       |   209 |
++------+-------------------------------+----------+-------+
+
+Top 9 Directories by Total Lines
++------+--------------------+-------+-------+
+| RANK |     DIRECTORY      | FILES | LINES |
++------+--------------------+-------+-------+
+|    1 | ./                 |    31 | 5,288 |
+|    2 | scanner/           |    13 | 2,858 |
+|    3 | output/            |     4 |   561 |
+|    4 | aggregator/        |     2 |   534 |
+|    5 | cmd/               |     2 |   376 |
+|    6 | .github/           |     2 |    97 |
+|    7 | .github/workflows/ |     2 |    97 |
+|    8 | homebrew-tap/      |     1 |    90 |
+|    9 | types/             |     1 |    77 |
++------+--------------------+-------+-------+
+
+31 files | 5,288 total lines
 
 # Language breakdown
 dirloc ~/projects/myapp --lang
@@ -42,6 +99,8 @@ dirloc . --lang --md > report.md
 dirloc ~/bigproject --cpuprofile cpu.prof
 go tool pprof -http=:6060 cpu.prof
 ```
+
+
 
 ### Flags
 
@@ -106,3 +165,53 @@ make test          # full suite
 make test-short    # skip stress tests
 make bench         # benchmarks with allocations
 ```
+
+## Building from Source
+
+```bash
+git clone https://github.com/mohsinkaleem/dirloc.git
+cd dirloc
+make build
+```
+
+## Releasing a New Version
+
+Releases are fully automated via [GoReleaser](https://goreleaser.com/) and GitHub Actions.
+
+1. Tag a new version:
+   ```bash
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+2. The [Release workflow](.github/workflows/release.yml) will:
+   - Build binaries for Linux, macOS, and Windows (amd64 + arm64)
+   - Create a GitHub Release with checksums and changelog
+   - Update the Homebrew formula in [mohsinkaleem/homebrew-tap](https://github.com/mohsinkaleem/homebrew-tap)
+
+## Architecture
+
+```
+dirloc/
+├── main.go            # Entry point — embeds languages.json, calls cmd.Execute()
+├── cmd/root.go        # Cobra CLI setup, flag parsing, orchestrates scan pipeline
+├── scanner/
+│   ├── walker.go      # Concurrent directory tree walker
+│   ├── counter.go     # Line counting (fast byte-scan & language-aware modes)
+│   ├── language.go    # Language detection from file extensions
+│   ├── gitignore.go   # .gitignore pattern matching
+│   ├── cache.go       # File-hash based scan result caching
+│   ├── ignore.go      # Built-in ignore rules (dirs, extensions, files)
+│   └── progress.go    # Live terminal progress indicator
+├── aggregator/        # Aggregates per-file results into dir & language summaries
+├── output/            # Renders results as table, JSON, or Markdown
+├── types/types.go     # Shared data structures
+└── languages.json     # Extension → language mapping (120+ extensions)
+```
+
+## Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## License
+
+[MIT](LICENSE)

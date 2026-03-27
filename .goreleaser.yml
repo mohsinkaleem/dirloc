@@ -1,0 +1,67 @@
+version: 2
+
+project_name: dirloc
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - main: .
+    binary: dirloc
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/dirloc/dirloc/cmd.Version={{.Version}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+brews:
+  - name: dirloc
+    repository:
+      owner: mohsinkaleem
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/mohsinkaleem/dirloc"
+    description: "A fast CLI tool that counts lines of code and reports top files/directories by size"
+    license: "MIT"
+    install: |
+      bin.install "dirloc"
+    test: |
+      system bin/"dirloc", "--help"
+
+release:
+  github:
+    owner: mohsinkaleem
+    name: dirloc
+  draft: false
+  prerelease: auto
+  name_template: "v{{.Version}}"
