@@ -1,6 +1,7 @@
 package aggregator
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/dirloc/dirloc/types"
@@ -52,14 +53,15 @@ func TestAggregateDirs_Simple(t *testing.T) {
 
 func TestAggregateDirs_HierarchyRollup(t *testing.T) {
 	results := []types.FileResult{
-		{Path: "src/pkg/file.go", Language: "Go", Code: 100, Total: 100},
+		{Path: filepath.Join("src", "pkg", "file.go"), Language: "Go", Code: 100, Total: 100},
 	}
 
 	dirs := AggregateDirs(results)
 
+	srcPkg := filepath.Join("src", "pkg")
 	// Both "src/pkg" and "src" should have the file's stats
-	if _, ok := dirs["src/pkg"]; !ok {
-		t.Fatal("expected 'src/pkg' in results")
+	if _, ok := dirs[srcPkg]; !ok {
+		t.Fatalf("expected %q in results, got keys: %v", srcPkg, mapKeys(dirs))
 	}
 	if _, ok := dirs["src"]; !ok {
 		t.Fatal("expected 'src' in results (hierarchy rollup)")
@@ -67,6 +69,14 @@ func TestAggregateDirs_HierarchyRollup(t *testing.T) {
 	if dirs["src"].Code != 100 {
 		t.Errorf("src code = %d, want 100", dirs["src"].Code)
 	}
+}
+
+func mapKeys(m map[string]*types.DirStats) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func TestAggregateDirs_SkipsErrors(t *testing.T) {
