@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A fast CLI tool that recursively scans a directory tree, counts lines of code, and reports top files/directories by size.
-
-![dirloc screenshot](https://raw.githubusercontent.com/mohsinkaleem/dirloc/main/.github/dirloc-view.png)
-
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mohsinkaleem/dirloc/main/.github/dirloc-view.png" width="70%"/>
+</p>
 
 ## Install
 
@@ -33,49 +33,11 @@ go install github.com/dirloc/dirloc@latest
 dirloc [path] [flags]
 ```
 
-
-
 ### Examples
 
 ```bash
 # Scan current directory
 dirloc
-➜  dirloc git:(main) dirloc
-
-dirloc — scanned 31 files (5 languages) in 9 directories [29ms]
-
-Top 10 Files by Total Lines
-+------+-------------------------------+----------+-------+
-| RANK |             FILE              | LANGUAGE | LINES |
-+------+-------------------------------+----------+-------+
-|    1 | scanner/counter_test.go       | Go       |   526 |
-|    2 | scanner/walker_test.go        | Go       |   516 |
-|    3 | scanner/bench_test.go         | Go       |   390 |
-|    4 | aggregator/aggregator_test.go | Go       |   349 |
-|    5 | cmd/root.go                   | Go       |   318 |
-|    6 | languages.json                | JSON     |   295 |
-|    7 | output/table.go               | Go       |   258 |
-|    8 | scanner/counter.go            | Go       |   238 |
-|    9 | scanner/ignore_test.go        | Go       |   220 |
-|   10 | scanner/walker.go             | Go       |   209 |
-+------+-------------------------------+----------+-------+
-
-Top 9 Directories by Total Lines
-+------+--------------------+-------+-------+
-| RANK |     DIRECTORY      | FILES | LINES |
-+------+--------------------+-------+-------+
-|    1 | ./                 |    31 | 5,288 |
-|    2 | scanner/           |    13 | 2,858 |
-|    3 | output/            |     4 |   561 |
-|    4 | aggregator/        |     2 |   534 |
-|    5 | cmd/               |     2 |   376 |
-|    6 | .github/           |     2 |    97 |
-|    7 | .github/workflows/ |     2 |    97 |
-|    8 | homebrew-tap/      |     1 |    90 |
-|    9 | types/             |     1 |    77 |
-+------+--------------------+-------+-------+
-
-31 files | 5,288 total lines
 
 # Language breakdown
 dirloc ~/projects/myapp --lang
