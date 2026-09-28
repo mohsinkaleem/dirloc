@@ -1,10 +1,12 @@
 package aggregator
 
 import (
+	"cmp"
 	"path/filepath"
-	"sort"
+	"slices"
+	"strings"
 
-	"github.com/dirloc/dirloc/types"
+	"github.com/mohsinkaleem/dirloc/types"
 )
 
 // AggregateDirs groups file results by directory and rolls up stats.
@@ -15,10 +17,8 @@ func AggregateDirs(results []types.FileResult) map[string]*types.DirStats {
 		if r.Error != "" {
 			continue
 		}
-		dir := filepath.Dir(r.Path)
-
 		// Walk up the directory hierarchy and add stats to each ancestor
-		for d := dir; ; d = filepath.Dir(d) {
+		for d := filepath.Dir(r.Path); ; d = filepath.Dir(d) {
 			ds, ok := dirs[d]
 			if !ok {
 				ds = &types.DirStats{Path: d}
@@ -30,7 +30,7 @@ func AggregateDirs(results []types.FileResult) map[string]*types.DirStats {
 			ds.Blank += r.Blank
 			ds.Total += r.Total
 
-			if d == "." || d == "/" || d == filepath.Dir(d) {
+			if d == filepath.Dir(d) {
 				break
 			}
 		}
@@ -39,7 +39,7 @@ func AggregateDirs(results []types.FileResult) map[string]*types.DirStats {
 	return dirs
 }
 
-// AggregateLangs groups file results by language.
+// AggregateLangs groups file results by language, sorted by code lines.
 func AggregateLangs(results []types.FileResult) []types.LangSummary {
 	langs := make(map[string]*types.LangSummary)
 
@@ -63,47 +63,63 @@ func AggregateLangs(results []types.FileResult) []types.LangSummary {
 	for _, ls := range langs {
 		summaries = append(summaries, *ls)
 	}
-
-	sort.Slice(summaries, func(i, j int) bool {
-		return summaries[i].Code > summaries[j].Code
+	slices.SortFunc(summaries, func(a, b types.LangSummary) int {
+		return cmp.Or(
+			cmp.Compare(b.Code, a.Code),
+			cmp.Compare(b.Total, a.Total),
+			strings.Compare(a.Language, b.Language),
+		)
 	})
-
 	return summaries
 }
 
+// metric picks the primary sort value for --sort.
+func metric(sortBy string, code, total, files int) int {
+	switch sortBy {
+	case "total":
+		return total
+	case "files":
+		return files
+	}
+	return code
+}
+
 // TopKFiles returns the top K files sorted by the specified field.
+// "files" has no per-file meaning and sorts by total lines.
 func TopKFiles(results []types.FileResult, k int, sortBy string) []types.FileResult {
-	// Filter out errors
 	valid := make([]types.FileResult, 0, len(results))
 	for _, r := range results {
 		if r.Error == "" {
 			valid = append(valid, r)
 		}
 	}
-
-	sortFunc := fileSortFunc(sortBy)
-	sort.Slice(valid, sortFunc(valid))
-
-	if k > len(valid) {
-		k = len(valid)
-	}
-	return valid[:k]
+	slices.SortFunc(valid, func(a, b types.FileResult) int {
+		return cmp.Or(
+			cmp.Compare(metric(sortBy, b.Code, b.Total, b.Total), metric(sortBy, a.Code, a.Total, a.Total)),
+			cmp.Compare(b.Total, a.Total),
+			strings.Compare(a.Path, b.Path),
+		)
+	})
+	return valid[:min(k, len(valid))]
 }
 
 // TopKDirs returns the top K directories sorted by the specified field.
+// The scan root is omitted since it duplicates the overall summary.
 func TopKDirs(dirStats map[string]*types.DirStats, k int, sortBy string) []types.DirStats {
 	dirs := make([]types.DirStats, 0, len(dirStats))
 	for _, ds := range dirStats {
-		dirs = append(dirs, *ds)
+		if ds.Path != "." {
+			dirs = append(dirs, *ds)
+		}
 	}
-
-	sortFunc := dirSortFunc(sortBy)
-	sort.Slice(dirs, sortFunc(dirs))
-
-	if k > len(dirs) {
-		k = len(dirs)
-	}
-	return dirs[:k]
+	slices.SortFunc(dirs, func(a, b types.DirStats) int {
+		return cmp.Or(
+			cmp.Compare(metric(sortBy, b.Code, b.Total, b.Files), metric(sortBy, a.Code, a.Total, a.Files)),
+			cmp.Compare(b.Total, a.Total),
+			strings.Compare(a.Path, b.Path),
+		)
+	})
+	return dirs[:min(k, len(dirs))]
 }
 
 // SummaryTotals computes overall scan summary.
@@ -126,60 +142,4 @@ func SummaryTotals(results []types.FileResult, dirStats map[string]*types.DirSta
 	}
 
 	return s
-}
-
-func fileSortFunc(sortBy string) func([]types.FileResult) func(int, int) bool {
-	return func(items []types.FileResult) func(int, int) bool {
-		switch sortBy {
-		case "total", "files":
-			// "files" has no meaningful per-file metric; fall through to "total".
-			return func(i, j int) bool {
-				if items[i].Total != items[j].Total {
-					return items[i].Total > items[j].Total
-				}
-				return items[i].Path < items[j].Path
-			}
-		default: // "code"
-			return func(i, j int) bool {
-				if items[i].Code != items[j].Code {
-					return items[i].Code > items[j].Code
-				}
-				if items[i].Total != items[j].Total {
-					return items[i].Total > items[j].Total
-				}
-				return items[i].Path < items[j].Path
-			}
-		}
-	}
-}
-
-func dirSortFunc(sortBy string) func([]types.DirStats) func(int, int) bool {
-	return func(items []types.DirStats) func(int, int) bool {
-		switch sortBy {
-		case "total":
-			return func(i, j int) bool {
-				if items[i].Total != items[j].Total {
-					return items[i].Total > items[j].Total
-				}
-				return items[i].Path < items[j].Path
-			}
-		case "files":
-			return func(i, j int) bool {
-				if items[i].Files != items[j].Files {
-					return items[i].Files > items[j].Files
-				}
-				return items[i].Path < items[j].Path
-			}
-		default: // "code"
-			return func(i, j int) bool {
-				if items[i].Code != items[j].Code {
-					return items[i].Code > items[j].Code
-				}
-				if items[i].Total != items[j].Total {
-					return items[i].Total > items[j].Total
-				}
-				return items[i].Path < items[j].Path
-			}
-		}
-	}
 }

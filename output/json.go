@@ -2,29 +2,24 @@ package output
 
 import (
 	"encoding/json"
-	"os"
-	"time"
+	"io"
 
-	"github.com/dirloc/dirloc/types"
+	"github.com/mohsinkaleem/dirloc/types"
 )
 
-// RenderJSON outputs scan results as JSON.
-func RenderJSON(summary types.ScanSummary, topFiles []types.FileResult, topDirs []types.DirStats, langSummaries []types.LangSummary, config types.ScanConfig, elapsed time.Duration) error {
-	out := types.ScanOutput{
-		Summary: summary,
+func renderJSON(w io.Writer, r Report) error {
+	out := types.ScanOutput{Summary: r.Summary}
+	if !r.Config.NoTopFiles {
+		out.TopFiles = r.Files
+	}
+	if !r.Config.NoTopDirs {
+		out.TopDirs = r.Dirs
+	}
+	if r.Config.ShowLang {
+		out.Languages = r.Langs
 	}
 
-	if !config.NoTopFiles {
-		out.TopFiles = topFiles
-	}
-	if !config.NoTopDirs {
-		out.TopDirs = topDirs
-	}
-	if config.ShowLang {
-		out.Languages = langSummaries
-	}
-
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
 }

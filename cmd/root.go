@@ -2,22 +2,25 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"slices"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/dirloc/dirloc/aggregator"
-	"github.com/dirloc/dirloc/output"
-	"github.com/dirloc/dirloc/scanner"
-	"github.com/dirloc/dirloc/types"
+	"github.com/mohsinkaleem/dirloc/aggregator"
+	"github.com/mohsinkaleem/dirloc/output"
+	"github.com/mohsinkaleem/dirloc/scanner"
+	"github.com/mohsinkaleem/dirloc/types"
 )
 
 var Version = "dev"
@@ -31,51 +34,44 @@ var rootCmd = &cobra.Command{
 }
 
 var (
-	topK           int
-	excludeDirs    []string
-	excludeExts    []string
-	excludeFiles   []string
-	includeExts    []string
-	includeLangs   []string
-	workers        int
-	showLang       bool
-	showComplexity bool
+	cfg            types.ScanConfig
 	outputJSON     bool
 	outputMD       bool
-	noTopFiles     bool
-	noTopDirs      bool
-	sortBy         string
+	noColor        bool
 	maxFileSizeStr string
-	useGitignore   bool
-	useCache       bool
-	noProgress     bool
+	listLangs      bool
 	cpuProfile     string
 	memProfile     string
-	maxDepth       int
 )
 
 func init() {
-	rootCmd.Flags().IntVarP(&topK, "top-k", "k", 15, "Number of top files/dirs to display")
-	rootCmd.Flags().StringSliceVarP(&excludeDirs, "exclude-dir", "e", nil, "Additional directory names to ignore")
-	rootCmd.Flags().StringSliceVar(&excludeExts, "exclude-ext", nil, "Additional file extensions to ignore")
-	rootCmd.Flags().StringSliceVar(&excludeFiles, "exclude-file", nil, "Additional file names or glob patterns to ignore (e.g. config.json, *_test.go)")
-	rootCmd.Flags().StringSliceVar(&includeExts, "include-ext", nil, "Only include files with these extensions (e.g. go,py)")
-	rootCmd.Flags().StringSliceVar(&includeLangs, "include-lang", nil, "Only include files of these languages (e.g. Go,Python)")
-	rootCmd.Flags().IntVarP(&workers, "workers", "w", runtime.NumCPU(), "Number of parallel worker goroutines")
-	rootCmd.Flags().BoolVarP(&showLang, "lang", "l", false, "Show language breakdown")
-	rootCmd.Flags().BoolVarP(&showComplexity, "complexity", "c", false, "Show complexity column")
-	rootCmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
-	rootCmd.Flags().BoolVar(&outputMD, "md", false, "Output as Markdown")
-	rootCmd.Flags().BoolVar(&noTopFiles, "no-top-files", false, "Suppress top files list")
-	rootCmd.Flags().BoolVar(&noTopDirs, "no-top-dirs", false, "Suppress top dirs list")
-	rootCmd.Flags().StringVarP(&sortBy, "sort", "s", "code", "Sort by: code, total, files")
-	rootCmd.Flags().StringVar(&maxFileSizeStr, "max-file-size", "5MB", "Skip files larger than this (e.g., 10MB, 500KB)")
-	rootCmd.Flags().BoolVar(&useGitignore, "gitignore", false, "Respect .gitignore files")
-	rootCmd.Flags().BoolVar(&useCache, "cache", false, "Cache results in .dirlocache for faster re-scans")
-	rootCmd.Flags().BoolVar(&noProgress, "no-progress", false, "Disable progress indicator")
-	rootCmd.Flags().IntVar(&maxDepth, "depth", 0, "Maximum directory depth to scan (0 = unlimited)")
-	rootCmd.Flags().StringVar(&cpuProfile, "cpuprofile", "", "Write CPU profile to `file` (analyzed with go tool pprof)")
-	rootCmd.Flags().StringVar(&memProfile, "memprofile", "", "Write memory profile to `file` (analyzed with go tool pprof)")
+	f := rootCmd.Flags()
+	f.IntVarP(&cfg.TopK, "top-k", "k", 15, "Number of top files/dirs to display")
+	f.StringSliceVarP(&cfg.ExcludeDirs, "exclude-dir", "e", nil, "Additional directory names to ignore")
+	f.StringSliceVar(&cfg.ExcludeExts, "exclude-ext", nil, "Additional file extensions to ignore")
+	f.StringSliceVar(&cfg.ExcludeFiles, "exclude-file", nil, "Additional file names or glob patterns to ignore (e.g. config.json, *_test.go)")
+	f.StringSliceVar(&cfg.IncludeExts, "include-ext", nil, "Only include files with these extensions (e.g. go,py)")
+	f.StringSliceVar(&cfg.IncludeLangs, "include-lang", nil, "Only include files of these languages, case-insensitive (e.g. go,python)")
+	f.BoolVar(&cfg.IncludeDocs, "include-docs", false, "Also count documentation/data files (Markdown, JSON, YAML, ...)")
+	f.BoolVar(&cfg.SkipGenerated, "skip-generated", false, "Skip generated files (\"Code generated\", \"DO NOT EDIT\", \"@generated\" headers)")
+	f.IntVarP(&cfg.Workers, "workers", "w", runtime.NumCPU(), "Number of parallel worker goroutines")
+	f.BoolVarP(&cfg.ShowLang, "lang", "l", false, "Show language breakdown")
+	f.BoolVarP(&cfg.ShowComplexity, "complexity", "c", false, "Show complexity column")
+	f.StringVarP(&cfg.Format, "format", "o", "table", "Output format: "+strings.Join(output.Formats, ", "))
+	f.BoolVar(&outputJSON, "json", false, "Shortcut for --format json")
+	f.BoolVar(&outputMD, "md", false, "Shortcut for --format md")
+	f.BoolVar(&noColor, "no-color", false, "Disable colours (also honours NO_COLOR)")
+	f.BoolVar(&cfg.NoTopFiles, "no-top-files", false, "Suppress top files list")
+	f.BoolVar(&cfg.NoTopDirs, "no-top-dirs", false, "Suppress top dirs list")
+	f.StringVarP(&cfg.SortBy, "sort", "s", "code", "Sort by: code, total, files")
+	f.StringVar(&maxFileSizeStr, "max-file-size", "5MB", "Skip files larger than this (e.g., 10MB, 500KB)")
+	f.BoolVar(&cfg.UseGitignore, "gitignore", false, "Respect .gitignore files")
+	f.BoolVar(&cfg.UseCache, "cache", false, "Cache results in .dirlocache for faster re-scans")
+	f.BoolVar(&cfg.NoProgress, "no-progress", false, "Disable progress indicator")
+	f.IntVar(&cfg.MaxDepth, "depth", 0, "Maximum directory depth to scan (0 = unlimited)")
+	f.BoolVar(&listLangs, "list-langs", false, "List supported languages and exit")
+	f.StringVar(&cpuProfile, "cpuprofile", "", "Write CPU profile to `file` (analyzed with go tool pprof)")
+	f.StringVar(&memProfile, "memprofile", "", "Write memory profile to `file` (analyzed with go tool pprof)")
 
 	rootCmd.Version = Version
 }
@@ -87,21 +83,50 @@ func Execute() {
 	}
 }
 
-func runScan(cmd *cobra.Command, args []string) error {
-	// Validate flags
-	if outputJSON && outputMD {
-		return fmt.Errorf("cannot use --json and --md together")
+// validateFlags resolves shortcut flags and checks flag values.
+func validateFlags(cmd *cobra.Command) error {
+	if (outputJSON && outputMD) || ((outputJSON || outputMD) && cmd.Flags().Changed("format")) {
+		return errors.New("use only one of --format, --json, --md")
 	}
-	switch sortBy {
+	if outputJSON {
+		cfg.Format = "json"
+	}
+	if outputMD {
+		cfg.Format = "md"
+	}
+	if !slices.Contains(output.Formats, cfg.Format) {
+		return fmt.Errorf("invalid --format %q: must be one of %s", cfg.Format, strings.Join(output.Formats, ", "))
+	}
+	switch cfg.SortBy {
 	case "code", "total", "files":
 	default:
-		return fmt.Errorf("invalid --sort value %q: must be code, total, or files", sortBy)
+		return fmt.Errorf("invalid --sort value %q: must be code, total, or files", cfg.SortBy)
+	}
+	if cfg.TopK < 0 {
+		return errors.New("--top-k must not be negative")
+	}
+	if cfg.Workers < 1 {
+		return errors.New("--workers must be at least 1")
 	}
 
 	maxFileSize, err := parseSize(maxFileSizeStr)
 	if err != nil {
 		return fmt.Errorf("invalid --max-file-size %q: %w", maxFileSizeStr, err)
 	}
+	cfg.MaxFileSize = maxFileSize
+	return nil
+}
+
+func runScan(cmd *cobra.Command, args []string) error {
+	if listLangs {
+		printLanguages(os.Stdout)
+		return nil
+	}
+	if err := validateFlags(cmd); err != nil {
+		return err
+	}
+	// Past flag validation, errors are runtime failures; don't dump usage for them.
+	cmd.SilenceUsage = true
 
 	// Start CPU profiling before any scan work.
 	if cpuProfile != "" {
@@ -133,119 +158,67 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}()
 	}
 
-	root := "."
+	cfg.RootPath = "."
 	if len(args) > 0 {
-		root = args[0]
+		cfg.RootPath = args[0]
 	}
+	root := cfg.RootPath
 
-	config := types.ScanConfig{
-		RootPath:       root,
-		ExcludeDirs:    excludeDirs,
-		ExcludeExts:    excludeExts,
-		ExcludeFiles:   excludeFiles,
-		IncludeExts:    includeExts,
-		IncludeLangs:   includeLangs,
-		Workers:        workers,
-		TopK:           topK,
-		ShowLang:       showLang,
-		ShowComplexity: showComplexity,
-		OutputJSON:     outputJSON,
-		OutputMD:       outputMD,
-		NoTopFiles:     noTopFiles,
-		NoTopDirs:      noTopDirs,
-		SortBy:         sortBy,
-		MaxFileSize:    maxFileSize,
-		UseGitignore:   useGitignore,
-		UseCache:       useCache,
-		NoProgress:     noProgress,
-		MaxDepth:       maxDepth,
-	}
-
-	// Setup context with signal handling
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
 	start := time.Now()
 
-	// Build ignore rules
-	ignore := scanner.NewIgnoreRules(config.ExcludeDirs, config.ExcludeExts, config.ExcludeFiles)
+	ignore := scanner.NewIgnoreRules(cfg.ExcludeDirs, cfg.ExcludeExts, cfg.ExcludeFiles)
+	ignore.SetIncludes(cfg.IncludeExts, cfg.IncludeLangs, cfg.IncludeDocs)
 
-	// Gitignore matcher (opt-in)
 	var gitMatcher *scanner.GitIgnoreMatcher
-	if config.UseGitignore {
+	if cfg.UseGitignore {
 		gitMatcher = scanner.NewGitIgnoreMatcher()
 	}
 
-	// Progress indicator
 	var progress *scanner.Progress
-	if !config.NoProgress {
+	if !cfg.NoProgress {
 		progress = scanner.NewProgress() // returns nil if stderr is not a TTY
 	}
-	progress.Start()
 
-	// Load cache
 	var cache *scanner.Cache
-	if config.UseCache {
+	if cfg.UseCache {
 		cache = scanner.LoadCache(root)
 	}
 
-	// Walk the directory tree
-	paths, warnings, err := scanner.Walk(ctx, root, ignore, config.MaxFileSize, gitMatcher, progress, config.MaxDepth)
+	progress.Start()
+	paths, warnings, err := scanner.Walk(ctx, root, ignore, cfg.MaxFileSize, gitMatcher, progress, cfg.MaxDepth)
 	if err != nil {
 		progress.Stop()
 		return err
 	}
 
-	// Drain warnings in background
+	// Buffer warnings so they don't interleave with the progress line.
+	var warns []string
+	warnsDone := make(chan struct{})
 	go func() {
+		defer close(warnsDone)
 		for w := range warnings {
-			fmt.Fprintln(os.Stderr, w)
+			warns = append(warns, w)
 		}
 	}()
 
-	// Process files with worker pool
-	results := scanner.ProcessFiles(ctx, paths, config, cache)
-
-	// Collect all results with pre-allocation
-	estimated := int(progress.Count())
-	if estimated == 0 {
-		estimated = 256
-	}
-	allResults := make([]types.FileResult, 0, estimated)
-
-	// Build include filters
-	includeExtSet := make(map[string]bool, len(config.IncludeExts))
-	for _, e := range config.IncludeExts {
-		ext := strings.ToLower(e)
-		if !strings.HasPrefix(ext, ".") {
-			ext = "." + ext
-		}
-		includeExtSet[ext] = true
-	}
-	includeLangSet := make(map[string]bool, len(config.IncludeLangs))
-	for _, l := range config.IncludeLangs {
-		includeLangSet[l] = true
-	}
-	hasIncludeFilter := len(includeExtSet) > 0 || len(includeLangSet) > 0
-
-	for r := range results {
-		if hasIncludeFilter {
-			if len(includeLangSet) > 0 && !includeLangSet[r.Language] {
-				continue
-			}
-			if len(includeExtSet) > 0 {
-				ext := strings.ToLower(filepath.Ext(r.Path))
-				if !includeExtSet[ext] {
-					continue
-				}
-			}
-		}
+	allResults := make([]types.FileResult, 0, 256)
+	for r := range scanner.ProcessFiles(ctx, paths, cfg, cache) {
 		allResults = append(allResults, r)
 	}
 
 	progress.Stop()
+	<-warnsDone
+	for _, w := range warns {
+		fmt.Fprintln(os.Stderr, w)
+	}
 
-	// Save cache
+	if ctx.Err() != nil {
+		return errors.New("interrupted")
+	}
+
 	if cache != nil {
 		if err := cache.Save(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: cannot write cache: %v\n", err)
@@ -254,29 +227,37 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	elapsed := time.Since(start)
 
-	if len(allResults) == 0 {
+	if len(allResults) == 0 && cfg.Format == "table" {
 		fmt.Println("No code files found.")
 		return nil
 	}
 
-	// Aggregate
 	dirStats := aggregator.AggregateDirs(allResults)
 	langSummaries := aggregator.AggregateLangs(allResults)
-	topFiles := aggregator.TopKFiles(allResults, config.TopK, config.SortBy)
-	topDirs := aggregator.TopKDirs(dirStats, config.TopK, config.SortBy)
-	summary := aggregator.SummaryTotals(allResults, dirStats, len(langSummaries))
 
-	// Output
-	switch {
-	case config.OutputJSON:
-		return output.RenderJSON(summary, topFiles, topDirs, langSummaries, config, elapsed)
-	case config.OutputMD:
-		output.RenderMarkdown(summary, topFiles, topDirs, langSummaries, config, elapsed)
-	default:
-		output.RenderTable(summary, topFiles, topDirs, langSummaries, config, elapsed)
+	return output.Render(os.Stdout, output.Report{
+		Summary: aggregator.SummaryTotals(allResults, dirStats, len(langSummaries)),
+		Files:   aggregator.TopKFiles(allResults, cfg.TopK, cfg.SortBy),
+		Dirs:    aggregator.TopKDirs(dirStats, cfg.TopK, cfg.SortBy),
+		Langs:   langSummaries,
+		Config:  cfg,
+		Elapsed: elapsed,
+		Color:   output.ColorEnabled(os.Stdout, noColor),
+	})
+}
+
+func printLanguages(w io.Writer) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "LANGUAGE\tKIND\tMATCHES")
+	for _, l := range scanner.Languages() {
+		kind := "code"
+		if l.Doc {
+			kind = "docs"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", l.Name, kind, strings.Join(l.Patterns, " "))
 	}
-
-	return nil
+	tw.Flush()
+	fmt.Fprintln(w, "\ndocs languages are skipped unless --include-docs or --include-lang/--include-ext selects them.")
 }
 
 // parseSize parses a human-readable size string like "10MB" into bytes.

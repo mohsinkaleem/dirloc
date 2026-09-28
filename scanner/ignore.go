@@ -1,10 +1,8 @@
 package scanner
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
 // IgnoreRules determines which directories, files, and extensions to skip.
@@ -14,6 +12,9 @@ type IgnoreRules struct {
 	files        map[string]bool
 	compoundExts []string // pre-computed compound extensions like .min.js
 	fileGlobs    []string // glob patterns for file exclusion
+	includeExts  map[string]bool
+	includeLangs map[string]bool // lowercased
+	includeDocs  bool
 }
 
 var defaultIgnoreDirs = []string{
@@ -63,14 +64,10 @@ func NewIgnoreRules(extraDirs, extraExts, extraFiles []string) *IgnoreRules {
 	}
 
 	for _, e := range defaultIgnoreExts {
-		ir.exts[strings.ToLower(e)] = true
+		ir.exts[e] = true
 	}
 	for _, e := range extraExts {
-		ext := e
-		if !strings.HasPrefix(ext, ".") {
-			ext = "." + ext
-		}
-		ir.exts[strings.ToLower(ext)] = true
+		ir.exts[normalizeExt(e)] = true
 	}
 
 	for _, f := range defaultIgnoreFiles {
@@ -93,6 +90,42 @@ func NewIgnoreRules(extraDirs, extraExts, extraFiles []string) *IgnoreRules {
 	}
 
 	return ir
+}
+
+// normalizeExt turns "GO", "go" or ".go" into ".go".
+func normalizeExt(e string) string {
+	e = strings.ToLower(e)
+	if !strings.HasPrefix(e, ".") {
+		e = "." + e
+	}
+	return e
+}
+
+// SetIncludes limits scanning to the given extensions and languages (case-insensitive).
+// Documentation/data languages are skipped unless includeDocs is set or they are
+// explicitly included.
+func (ir *IgnoreRules) SetIncludes(exts, langs []string, includeDocs bool) {
+	ir.includeExts = make(map[string]bool, len(exts))
+	for _, e := range exts {
+		ir.includeExts[normalizeExt(e)] = true
+	}
+	ir.includeLangs = make(map[string]bool, len(langs))
+	for _, l := range langs {
+		ir.includeLangs[strings.ToLower(l)] = true
+	}
+	ir.includeDocs = includeDocs
+}
+
+// ShouldSkipLang reports whether a file with this name and detected language is filtered out.
+func (ir *IgnoreRules) ShouldSkipLang(name, lang string) bool {
+	if len(ir.includeLangs) > 0 && !ir.includeLangs[strings.ToLower(lang)] {
+		return true
+	}
+	if len(ir.includeExts) > 0 && !ir.includeExts[strings.ToLower(filepath.Ext(name))] {
+		return true
+	}
+	explicit := len(ir.includeLangs) > 0 || len(ir.includeExts) > 0
+	return !explicit && !ir.includeDocs && IsDocLanguage(lang)
 }
 
 // ShouldSkipDir returns true if the directory name should be skipped.
@@ -121,38 +154,6 @@ func (ir *IgnoreRules) ShouldSkipFile(name string) bool {
 	// Check glob patterns
 	for _, pattern := range ir.fileGlobs {
 		if matched, _ := filepath.Match(pattern, name); matched {
-			return true
-		}
-	}
-	return false
-}
-
-var binaryCheckPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, 512)
-		return &buf
-	},
-}
-
-// IsBinary reads the first 512 bytes and checks for null bytes.
-func IsBinary(path string) bool {
-	f, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-
-	bufPtr := binaryCheckPool.Get().(*[]byte)
-	defer binaryCheckPool.Put(bufPtr)
-	buf := *bufPtr
-
-	n, err := f.Read(buf)
-	if err != nil || n == 0 {
-		return false
-	}
-
-	for _, b := range buf[:n] {
-		if b == 0 {
 			return true
 		}
 	}

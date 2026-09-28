@@ -1,6 +1,6 @@
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BINARY     := dirloc
-LDFLAGS    := -ldflags "-X github.com/dirloc/dirloc/cmd.Version=$(VERSION)"
+LDFLAGS    := -ldflags "-X github.com/mohsinkaleem/dirloc/cmd.Version=$(VERSION)"
 PROFILE_PATH ?= .
 
 .PHONY: build install test test-short bench stress lint clean \

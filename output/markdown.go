@@ -2,125 +2,84 @@ package output
 
 import (
 	"fmt"
-	"time"
+	"io"
+	"strings"
 
-	"github.com/dirloc/dirloc/types"
+	"github.com/mohsinkaleem/dirloc/types"
 )
 
-// RenderMarkdown outputs scan results as Markdown tables.
-func RenderMarkdown(summary types.ScanSummary, topFiles []types.FileResult, topDirs []types.DirStats, langSummaries []types.LangSummary, config types.ScanConfig, elapsed time.Duration) {
-	fmt.Printf("# dirloc Report\n\n")
-	fmt.Printf("Scanned **%s** files (**%d** languages) in **%s** directories [%s]\n\n",
-		formatNum(summary.TotalFiles), summary.Languages, formatNum(summary.Directories), formatDuration(elapsed))
+// maxPieSlices caps the Mermaid pie chart; smaller languages are grouped as "Other".
+const maxPieSlices = 8
 
-	if !config.NoTopFiles && len(topFiles) > 0 {
-		renderTopFilesMarkdown(topFiles, config)
+func renderMarkdown(w io.Writer, r Report) {
+	s := r.Summary
+	fmt.Fprint(w, "# dirloc Report\n\n")
+	fmt.Fprintf(w, "Scanned **%s** files (**%d** languages) in **%s** directories [%s]\n\n",
+		formatNum(s.TotalFiles), s.Languages, formatNum(s.Directories), formatDuration(r.Elapsed))
+
+	for _, sec := range r.sections() {
+		fmt.Fprintf(w, "## %s\n\n", sec.title)
+		writeMarkdownRow(w, sec.header)
+
+		align := make([]string, len(sec.header))
+		for i := range align {
+			align[i] = "---:"
+		}
+		for _, i := range sec.left {
+			align[i] = ":---"
+		}
+		writeMarkdownRow(w, align)
+
+		for _, row := range sec.rows {
+			writeMarkdownRow(w, formatRow(row, true))
+		}
+		if sec.footer != nil {
+			writeMarkdownRow(w, formatRow(sec.footer, true))
+		}
+		fmt.Fprintln(w)
 	}
 
-	if !config.NoTopDirs && len(topDirs) > 0 {
-		renderTopDirsMarkdown(topDirs, config)
+	if r.Config.ShowLang {
+		writeMermaidPie(w, r.Langs)
 	}
 
-	if config.ShowLang && len(langSummaries) > 0 {
-		renderLangMarkdown(langSummaries)
-	}
-
-	if config.ShowLang {
-		fmt.Printf("**Summary:** %s files | %s code | %s comments | %s blank | %s total\n\n",
-			formatNum(summary.TotalFiles),
-			formatNum(summary.TotalCode),
-			formatNum(summary.TotalComment),
-			formatNum(summary.TotalBlank),
-			formatNum(summary.TotalLines))
-	} else {
-		fmt.Printf("**Summary:** %s files | %s total lines\n\n",
-			formatNum(summary.TotalFiles),
-			formatNum(summary.TotalLines))
-	}
-
-	if summary.Errors > 0 {
-		fmt.Printf("_%s files skipped due to errors_\n\n", formatNum(summary.Errors))
+	fmt.Fprintf(w, "**Summary:** %s\n\n", summaryLine(r, func(s string) string { return s }))
+	if s.Errors > 0 {
+		fmt.Fprintf(w, "_%s files skipped due to errors_\n\n", formatNum(s.Errors))
 	}
 }
 
-func renderTopFilesMarkdown(files []types.FileResult, config types.ScanConfig) {
-	fmt.Printf("## Top %d Files by %s\n\n", len(files), topFilesLabel(config))
-
-	// Header
-	fmt.Print("| Rank | File | Language |")
-	if config.ShowLang {
-		fmt.Print(" Code | Comment | Blank |")
+func writeMarkdownRow(w io.Writer, cells []string) {
+	escaped := make([]string, len(cells))
+	for i, c := range cells {
+		escaped[i] = strings.ReplaceAll(c, "|", `\|`)
 	}
-	fmt.Print(" Total |")
-	if config.ShowComplexity {
-		fmt.Print(" Complexity |")
-	}
-	fmt.Println()
-
-	// Alignment
-	fmt.Print("|---:|:---|:---|")
-	if config.ShowLang {
-		fmt.Print("---:|---:|---:|")
-	}
-	fmt.Print("---:|")
-	if config.ShowComplexity {
-		fmt.Print("---:|")
-	}
-	fmt.Println()
-
-	// Rows
-	for i, f := range files {
-		fmt.Printf("| %d | %s | %s |", i+1, f.Path, f.Language)
-		if config.ShowLang {
-			fmt.Printf(" %s | %s | %s |", formatNum(f.Code), formatNum(f.Comment), formatNum(f.Blank))
-		}
-		fmt.Printf(" %s |", formatNum(f.Total))
-		if config.ShowComplexity {
-			fmt.Printf(" %s |", formatNum(f.Complexity))
-		}
-		fmt.Println()
-	}
-	fmt.Println()
+	fmt.Fprintf(w, "| %s |\n", strings.Join(escaped, " | "))
 }
 
-func renderTopDirsMarkdown(dirs []types.DirStats, config types.ScanConfig) {
-	fmt.Printf("## Top %d Directories by %s\n\n", len(dirs), topDirsLabel(config))
-
-	// Header
-	fmt.Print("| Rank | Directory | Files |")
-	if config.ShowLang {
-		fmt.Print(" Code |")
-	}
-	fmt.Println(" Lines |")
-
-	// Alignment
-	fmt.Print("|---:|:---|---:|")
-	if config.ShowLang {
-		fmt.Print("---:|")
-	}
-	fmt.Println("---:|")
-
-	// Rows
-	for i, d := range dirs {
-		fmt.Printf("| %d | %s/ | %s |", i+1, d.Path, formatNum(d.Files))
-		if config.ShowLang {
-			fmt.Printf(" %s |", formatNum(d.Code))
-		}
-		fmt.Printf(" %s |\n", formatNum(d.Total))
-	}
-	fmt.Println()
-}
-
-func renderLangMarkdown(langs []types.LangSummary) {
-	fmt.Println("## Language Breakdown")
-	fmt.Println()
-	fmt.Println("| Language | Files | Code | Comment | Blank | Lines |")
-	fmt.Println("|:---|---:|---:|---:|---:|---:|")
-
+// writeMermaidPie renders code lines per language as a Mermaid pie chart (rendered by GitHub).
+func writeMermaidPie(w io.Writer, langs []types.LangSummary) {
+	var shown []types.LangSummary
+	other := 0
 	for _, l := range langs {
-		fmt.Printf("| %s | %s | %s | %s | %s | %s |\n",
-			l.Language, formatNum(l.Files), formatNum(l.Code),
-			formatNum(l.Comment), formatNum(l.Blank), formatNum(l.Total))
+		switch {
+		case l.Code == 0:
+		case len(shown) < maxPieSlices:
+			shown = append(shown, l)
+		default:
+			other += l.Code
+		}
 	}
-	fmt.Println()
+	if len(shown) == 0 {
+		return
+	}
+
+	fmt.Fprint(w, "```mermaid\npie showData title Code lines by language\n")
+	for _, l := range shown {
+		fmt.Fprintf(w, "    \"%s\" : %d\n", strings.ReplaceAll(l.Language, `"`, "'"), l.Code)
+	}
+	if other > 0 {
+		fmt.Fprintf(w, "    \"Other\" : %d\n", other)
+	}
+	fmt.Fprint(w, "```\n\n")
 }

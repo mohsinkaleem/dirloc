@@ -50,7 +50,7 @@ Thanks for your interest in contributing!
 - **`cmd/`** — CLI flag parsing and scan orchestration (Cobra)
 - **`scanner/`** — Directory walking, line counting, language detection, caching
 - **`aggregator/`** — Aggregates per-file stats into directory and language summaries
-- **`output/`** — Table, JSON, and Markdown renderers
+- **`output/`** — Table, JSON, Markdown, and CSV renderers
 - **`types/`** — Shared data structures
 
 ### Code Style

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dirloc/dirloc/types"
+	"github.com/mohsinkaleem/dirloc/types"
 )
 
 // Walk traverses the directory tree starting at root, sending file paths to the returned channel.
@@ -63,10 +63,6 @@ func Walk(ctx context.Context, root string, ignore *IgnoreRules, maxFileSize int
 				if path != root && ignore.ShouldSkipDir(name) {
 					return fs.SkipDir
 				}
-				// Skip symlinked directories to avoid cycles
-				if d.Type()&fs.ModeSymlink != 0 {
-					return fs.SkipDir
-				}
 				// Load .gitignore for this directory if enabled
 				if gitMatcher != nil {
 					gitMatcher.LoadDir(path)
@@ -88,8 +84,9 @@ func Walk(ctx context.Context, root string, ignore *IgnoreRules, maxFileSize int
 				return nil
 			}
 
-			// Skip non-code files
-			if !IsCodeFile(path) {
+			// Skip non-code files and those excluded by --include-*/docs filters
+			lang := DetectFileLanguage(path)
+			if lang == UnknownLanguage || ignore.ShouldSkipLang(name, lang) {
 				return nil
 			}
 
@@ -122,11 +119,9 @@ func Walk(ctx context.Context, root string, ignore *IgnoreRules, maxFileSize int
 
 // ProcessFiles spawns worker goroutines to analyze files from the paths channel.
 // If cache is non-nil, workers check it before reading files and store results.
+// Binary files, and generated files when config.SkipGenerated is set, are dropped.
 func ProcessFiles(ctx context.Context, paths <-chan string, config types.ScanConfig, cache *Cache) <-chan types.FileResult {
 	results := make(chan types.FileResult, 256)
-
-	needDetailed := config.ShowLang || config.ShowComplexity
-	needComplexity := config.ShowComplexity
 
 	var wg sync.WaitGroup
 	for i := 0; i < config.Workers; i++ {
@@ -134,65 +129,15 @@ func ProcessFiles(ctx context.Context, paths <-chan string, config types.ScanCon
 		go func() {
 			defer wg.Done()
 			for path := range paths {
-				select {
-				case <-ctx.Done():
+				if ctx.Err() != nil {
 					return
-				default:
 				}
-
-				lang := DetectLanguage(path)
-
-				// Make path relative to root for cleaner output
-				relPath := path
-				if rel, err := filepath.Rel(config.RootPath, path); err == nil {
-					relPath = rel
-				}
-
-				// Stat once and reuse for cache lookup/store
-				var fileInfo os.FileInfo
-				if cache != nil {
-					fi, err := os.Stat(path)
-					if err == nil {
-						fileInfo = fi
-						if cached, ok := cache.Lookup(relPath, fi.ModTime().UnixNano(), fi.Size(), needDetailed, needComplexity); ok {
-							select {
-							case results <- *cached:
-							case <-ctx.Done():
-								return
-							}
-							continue
-						}
-					}
-				}
-
-				var result *types.FileResult
-				if needDetailed {
-					prefixes := GetCommentPrefixes(lang)
-					blockStart, blockEnd := GetBlockCommentDelimiters(lang)
-					result, _ = CountLines(path, lang, prefixes, blockStart, blockEnd, needComplexity)
-				} else {
-					result, _ = CountTotalLines(path, lang)
-				}
-
-				// nil result means binary file detected inside count function
-				if result == nil {
+				r := processFile(path, config, cache)
+				if r == nil || (config.SkipGenerated && r.Generated) {
 					continue
 				}
-
-				result.Path = relPath
-
-				// Store in cache (reuse fileInfo if available)
-				if cache != nil {
-					if fileInfo == nil {
-						fileInfo, _ = os.Stat(path)
-					}
-					if fileInfo != nil {
-						cache.Store(relPath, fileInfo.ModTime().UnixNano(), fileInfo.Size(), needDetailed, needComplexity, *result)
-					}
-				}
-
 				select {
-				case results <- *result:
+				case results <- *r:
 				case <-ctx.Done():
 					return
 				}
@@ -206,4 +151,42 @@ func ProcessFiles(ctx context.Context, paths <-chan string, config types.ScanCon
 	}()
 
 	return results
+}
+
+// processFile returns the result for one file (from cache when possible), or nil for binary files.
+func processFile(path string, config types.ScanConfig, cache *Cache) *types.FileResult {
+	detailed := config.ShowLang || config.ShowComplexity
+
+	relPath := path
+	if rel, err := filepath.Rel(config.RootPath, path); err == nil {
+		relPath = rel
+	}
+
+	var info os.FileInfo
+	if cache != nil {
+		if fi, err := os.Stat(path); err == nil {
+			info = fi
+			if cached, ok := cache.Lookup(relPath, fi.ModTime().UnixNano(), fi.Size(), detailed, config.ShowComplexity); ok {
+				return cached
+			}
+		}
+	}
+
+	lang := DetectFileLanguage(path)
+	var result *types.FileResult
+	if detailed {
+		blockStart, blockEnd := GetBlockCommentDelimiters(lang)
+		result, _ = CountLines(path, lang, GetCommentPrefixes(lang), blockStart, blockEnd, config.ShowComplexity)
+	} else {
+		result, _ = CountTotalLines(path, lang)
+	}
+	if result == nil {
+		return nil
+	}
+	result.Path = relPath
+
+	if info != nil && result.Error == "" {
+		cache.Store(relPath, info.ModTime().UnixNano(), info.Size(), detailed, config.ShowComplexity, *result)
+	}
+	return result
 }

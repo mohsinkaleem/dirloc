@@ -3,8 +3,8 @@ package main
 import (
 	_ "embed"
 
-	"github.com/dirloc/dirloc/cmd"
-	"github.com/dirloc/dirloc/scanner"
+	"github.com/mohsinkaleem/dirloc/cmd"
+	"github.com/mohsinkaleem/dirloc/scanner"
 )
 
 //go:embed languages.json

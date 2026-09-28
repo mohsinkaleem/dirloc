@@ -1,8 +1,6 @@
 package scanner
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -145,55 +143,47 @@ func TestShouldSkipFile_GlobPatterns(t *testing.T) {
 	}
 }
 
-// --- IsBinary tests ---
+// --- ShouldSkipLang tests ---
 
-func TestIsBinary_TextFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "text.txt")
-	os.WriteFile(path, []byte("hello world\n"), 0644)
+func TestShouldSkipLang_DocsExcludedByDefault(t *testing.T) {
+	ir := NewIgnoreRules(nil, nil, nil)
+	if !ir.ShouldSkipLang("README.md", "Markdown") {
+		t.Error("Markdown should be skipped by default")
+	}
+	if ir.ShouldSkipLang("main.go", "Go") {
+		t.Error("Go should not be skipped")
+	}
 
-	if IsBinary(path) {
-		t.Error("text file should not be detected as binary")
+	ir.SetIncludes(nil, nil, true)
+	if ir.ShouldSkipLang("README.md", "Markdown") {
+		t.Error("Markdown should be counted with includeDocs")
 	}
 }
 
-func TestIsBinary_BinaryFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "binary.bin")
-	data := make([]byte, 100)
-	data[50] = 0 // null byte
-	os.WriteFile(path, data, 0644)
+func TestShouldSkipLang_IncludeFilters(t *testing.T) {
+	ir := NewIgnoreRules(nil, nil, nil)
+	ir.SetIncludes([]string{"GO", ".json"}, nil, false)
 
-	if !IsBinary(path) {
-		t.Error("file with null byte should be detected as binary")
+	tests := []struct {
+		name, lang string
+		want       bool
+	}{
+		{"main.go", "Go", false},
+		{"data.json", "JSON", false}, // explicit include overrides docs exclusion
+		{"app.py", "Python", true},
 	}
-}
-
-func TestIsBinary_EmptyFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "empty")
-	os.WriteFile(path, []byte{}, 0644)
-
-	if IsBinary(path) {
-		t.Error("empty file should not be detected as binary")
+	for _, tt := range tests {
+		if got := ir.ShouldSkipLang(tt.name, tt.lang); got != tt.want {
+			t.Errorf("ShouldSkipLang(%q, %q) = %v, want %v", tt.name, tt.lang, got, tt.want)
+		}
 	}
-}
 
-func TestIsBinary_NonExistent(t *testing.T) {
-	if IsBinary("/nonexistent/file") {
-		t.Error("nonexistent file should not be detected as binary")
+	ir.SetIncludes(nil, []string{"python"}, false)
+	if ir.ShouldSkipLang("app.py", "Python") {
+		t.Error("--include-lang should be case-insensitive")
 	}
-}
-
-func BenchmarkIsBinary_Text(b *testing.B) {
-	dir := b.TempDir()
-	path := filepath.Join(dir, "text.txt")
-	os.WriteFile(path, []byte("hello world line of text\n"), 0644)
-
-	b.ResetTimer()
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		IsBinary(path)
+	if !ir.ShouldSkipLang("main.go", "Go") {
+		t.Error("Go should be skipped when only Python is included")
 	}
 }
 

@@ -9,6 +9,7 @@ type FileResult struct {
 	Blank      int    `json:"blank"`
 	Total      int    `json:"total"`
 	Complexity int    `json:"complexity,omitempty"`
+	Generated  bool   `json:"generated,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 
@@ -52,12 +53,13 @@ type ScanConfig struct {
 	ExcludeFiles   []string
 	IncludeExts    []string
 	IncludeLangs   []string
+	IncludeDocs    bool
+	SkipGenerated  bool
 	Workers        int
 	TopK           int
 	ShowLang       bool
 	ShowComplexity bool
-	OutputJSON     bool
-	OutputMD       bool
+	Format         string // table, json, md, csv
 	NoTopFiles     bool
 	NoTopDirs      bool
 	SortBy         string

@@ -38,14 +38,6 @@ func (p *Progress) Inc() {
 	atomic.AddInt64(&p.count, 1)
 }
 
-// Count returns the current scanned-file count.
-func (p *Progress) Count() int64 {
-	if p == nil {
-		return 0
-	}
-	return atomic.LoadInt64(&p.count)
-}
-
 // Start begins the periodic status line on stderr.
 func (p *Progress) Start() {
 	if p == nil {

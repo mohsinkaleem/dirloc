@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/dirloc/dirloc/types"
+	"github.com/mohsinkaleem/dirloc/types"
 )
 
 const cacheFileName = ".dirlocache"
-const cacheVersion = 1
+const cacheVersion = 2
 
 // CacheEntry stores cached line-count results for a single file.
 type CacheEntry struct {

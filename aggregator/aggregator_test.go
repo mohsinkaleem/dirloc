@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dirloc/dirloc/types"
+	"github.com/mohsinkaleem/dirloc/types"
 )
 
 func makeResults(n int) []types.FileResult {
@@ -221,8 +221,8 @@ func TestTopKDirs_Basic(t *testing.T) {
 
 func TestTopKDirs_SortByFiles(t *testing.T) {
 	dirStats := map[string]*types.DirStats{
-		"src":  {Path: "src", Files: 5, Code: 1000, Total: 1500},
-		"lib":  {Path: "lib", Files: 10, Code: 500, Total: 700},
+		"src": {Path: "src", Files: 5, Code: 1000, Total: 1500},
+		"lib": {Path: "lib", Files: 10, Code: 500, Total: 700},
 	}
 
 	top := TopKDirs(dirStats, 2, "files")
@@ -232,6 +232,29 @@ func TestTopKDirs_SortByFiles(t *testing.T) {
 }
 
 // --- SummaryTotals tests ---
+
+func TestTopKDirs_OmitsRoot(t *testing.T) {
+	results := []types.FileResult{
+		{Path: "main.go", Code: 10, Total: 10},
+		{Path: filepath.Join("src", "a.go"), Code: 5, Total: 5},
+	}
+	top := TopKDirs(AggregateDirs(results), 10, "code")
+	if len(top) != 1 || top[0].Path != "src" {
+		t.Errorf("expected only src (root omitted), got %+v", top)
+	}
+}
+
+func TestAggregateLangs_DeterministicTies(t *testing.T) {
+	results := []types.FileResult{
+		{Path: "b.rs", Language: "Rust", Total: 10},
+		{Path: "a.go", Language: "Go", Total: 10},
+		{Path: "c.py", Language: "Python", Total: 20},
+	}
+	langs := AggregateLangs(results)
+	if langs[0].Language != "Python" || langs[1].Language != "Go" || langs[2].Language != "Rust" {
+		t.Errorf("unexpected order: %v, %v, %v", langs[0].Language, langs[1].Language, langs[2].Language)
+	}
+}
 
 func TestSummaryTotals(t *testing.T) {
 	results := []types.FileResult{

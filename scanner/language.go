@@ -1,16 +1,27 @@
 package scanner
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
+
+// UnknownLanguage is returned when a file cannot be mapped to a language.
+const UnknownLanguage = "Unknown"
 
 type languageDB struct {
 	Extensions    map[string]string   `json:"extensions"`
 	Filenames     map[string]string   `json:"filenames"`
+	Interpreters  map[string]string   `json:"interpreters"`
+	DocLanguages  []string            `json:"docLanguages"`
 	Comments      map[string][]string `json:"comments"`
 	BlockComments map[string][]string `json:"blockComments"`
+
+	docs map[string]bool
 }
 
 var langDB languageDB
@@ -21,10 +32,14 @@ func InitLanguages(data []byte) {
 	if err := json.Unmarshal(data, &langDB); err != nil {
 		panic("dirloc: failed to parse embedded languages.json: " + err.Error())
 	}
+	langDB.docs = make(map[string]bool, len(langDB.DocLanguages))
+	for _, l := range langDB.DocLanguages {
+		langDB.docs[l] = true
+	}
 }
 
 // DetectLanguage returns the language name for a given file path.
-// It checks exact filename first, then extension. Returns "Unknown" if unrecognized.
+// It checks exact filename first, then extension. Returns UnknownLanguage if unrecognized.
 func DetectLanguage(path string) string {
 	base := filepath.Base(path)
 
@@ -37,7 +52,59 @@ func DetectLanguage(path string) string {
 		return lang
 	}
 
-	return "Unknown"
+	return UnknownLanguage
+}
+
+// DetectFileLanguage is DetectLanguage plus a shebang check for extensionless files.
+func DetectFileLanguage(path string) string {
+	lang := DetectLanguage(path)
+	if lang != UnknownLanguage || filepath.Ext(path) != "" {
+		return lang
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return UnknownLanguage
+	}
+	defer f.Close()
+	var head [128]byte
+	n, _ := io.ReadFull(f, head[:])
+	return shebangLanguage(head[:n])
+}
+
+// shebangLanguage maps a "#!" line such as "#!/usr/bin/env python3" to a language.
+func shebangLanguage(head []byte) string {
+	line, ok := bytes.CutPrefix(head, []byte("#!"))
+	if !ok {
+		return UnknownLanguage
+	}
+	if i := bytes.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	fields := strings.Fields(string(line))
+	if len(fields) == 0 {
+		return UnknownLanguage
+	}
+	name := filepath.Base(fields[0])
+	if name == "env" {
+		name = ""
+		for _, f := range fields[1:] {
+			if !strings.HasPrefix(f, "-") {
+				name = f
+				break
+			}
+		}
+	}
+	// python3.12 -> python, perl5 -> perl
+	name = strings.TrimRight(name, "0123456789.")
+	if lang, ok := langDB.Interpreters[name]; ok {
+		return lang
+	}
+	return UnknownLanguage
+}
+
+// IsDocLanguage reports whether lang is a documentation/data format (Markdown, JSON, YAML, ...).
+func IsDocLanguage(lang string) bool {
+	return langDB.docs[lang]
 }
 
 // GetCommentPrefixes returns single-line comment prefixes for a language.
@@ -57,7 +124,30 @@ func GetBlockCommentDelimiters(lang string) (string, string) {
 	return "", ""
 }
 
-// IsCodeFile returns true if the file maps to a known language.
-func IsCodeFile(path string) bool {
-	return DetectLanguage(path) != "Unknown"
+// LanguageInfo describes one supported language.
+type LanguageInfo struct {
+	Name     string
+	Patterns []string // extensions and exact filenames
+	Doc      bool
+}
+
+// Languages returns all supported languages sorted by name.
+func Languages() []LanguageInfo {
+	byName := make(map[string][]string)
+	for ext, lang := range langDB.Extensions {
+		byName[lang] = append(byName[lang], ext)
+	}
+	for name, lang := range langDB.Filenames {
+		byName[lang] = append(byName[lang], name)
+	}
+
+	out := make([]LanguageInfo, 0, len(byName))
+	for name, patterns := range byName {
+		slices.Sort(patterns)
+		out = append(out, LanguageInfo{Name: name, Patterns: patterns, Doc: IsDocLanguage(name)})
+	}
+	slices.SortFunc(out, func(a, b LanguageInfo) int {
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+	return out
 }

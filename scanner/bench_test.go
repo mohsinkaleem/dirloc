@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/dirloc/dirloc/aggregator"
-	"github.com/dirloc/dirloc/types"
+	"github.com/mohsinkaleem/dirloc/aggregator"
+	"github.com/mohsinkaleem/dirloc/types"
 )
 
 // --- helpers ----------------------------------------------------------------

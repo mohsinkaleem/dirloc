@@ -1,9 +1,14 @@
 package output
 
 import (
+	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/mattn/go-runewidth"
 )
 
 func TestFormatNum(t *testing.T) {
@@ -55,76 +60,93 @@ func TestTruncatePath(t *testing.T) {
 	tests := []struct {
 		path     string
 		maxWidth int
+		want     string
 	}{
 		// No truncation needed
-		{"short/path", 20},
-		{"exactly10ch", 20},
-		// Truncation cases
-		{"very/long/deeply/nested/path/to/some/file.go", 20},
-		{"google-cloud-sdk/lib/googlecloudsdk/generated_clients/apis/", 40},
-		// Edge cases
-		{"abc", 3},
-		{"abcd", 3},
-		{"", 10},
-		{"hello", 0},
+		{"short/path", 20, "short/path"},
+		{"", 10, ""},
+		{"hello", 0, "hello"},
+		{"abc", 3, "abc"},
+		// Middle directories are elided; top-level dir and file name are kept.
+		{"scanner/sub/deep/counter_test.go", 25, "scanner/…/counter_test.go"},
+		{"very/long/deeply/nested/path/to/some/file.go", 20, "very/…/some/file.go"},
+		{"a/very/long/directory/name/", 15, "a/very/…/name/"},
+		// Leftover width shows the start of the elided part.
+		{"aggregator/aggregator_test.go", 27, "aggrega…/aggregator_test.go"},
+		{"google-cloud-sdk/lib/googlecloudsdk/generated_clients/apis/", 40, "google-cloud-sdk/lib/googleclouds…/apis/"},
+		// A single element that is too wide keeps its end.
+		{"abcd", 3, "…cd"},
+		// Wide (CJK) characters count as two cells.
+		{"文档/说明文件.go", 12, "…说明文件.go"},
 	}
 
 	for _, tt := range tests {
-		got := truncatePath(tt.path, tt.maxWidth)
-		if tt.maxWidth > 0 && len(tt.path) > tt.maxWidth {
-			// Truncated path display width should not exceed maxWidth
-			// Display width = 1 (for …) + len(ASCII suffix)
-			// The … character is 3 bytes but 1 display column
-			if strings.HasPrefix(got, "…") {
-				displayWidth := 1 + len(got) - len("…") // 1 for ellipsis + ASCII suffix len
-				if displayWidth > tt.maxWidth {
-					t.Errorf("truncatePath(%q, %d): display width %d exceeds max",
-						tt.path, tt.maxWidth, displayWidth)
-				}
-			}
+		path, want := filepath.FromSlash(tt.path), filepath.FromSlash(tt.want)
+		got := truncatePath(path, tt.maxWidth)
+		if got != want {
+			t.Errorf("truncatePath(%q, %d) = %q, want %q", path, tt.maxWidth, got, want)
 		}
-		if tt.maxWidth <= 0 {
-			if got != tt.path {
-				t.Errorf("truncatePath(%q, %d) = %q, want original path", tt.path, tt.maxWidth, got)
-			}
+		if tt.maxWidth > 0 && runewidth.StringWidth(got) > tt.maxWidth {
+			t.Errorf("truncatePath(%q, %d) width %d exceeds max", path, tt.maxWidth, runewidth.StringWidth(got))
 		}
 	}
 }
 
-func TestTruncatePath_PreservesEnd(t *testing.T) {
-	path := "google-cloud-sdk/lib/googlecloudsdk/generated_clients/apis/"
-	truncated := truncatePath(path, 40)
-
-	// Should start with ellipsis
-	if !strings.HasPrefix(truncated, "…") {
-		t.Errorf("truncated path should start with …, got %q", truncated)
-	}
-
-	// The most specific part (end) should be preserved
-	suffix := "generated_clients/apis/"
-	if !strings.HasSuffix(truncated, suffix) {
-		t.Errorf("truncated path should end with %q, got %q", suffix, truncated)
-	}
-}
-
-func TestComputeMaxPathWidth(t *testing.T) {
+func TestShareBar(t *testing.T) {
 	tests := []struct {
-		termWidth    int
-		numOtherCols int
-		minExpected  int
+		frac  float64
+		width int
+		want  string
 	}{
-		{120, 3, 65},  // 120 - 45 = 75
-		{80, 3, 20},   // 80 - 45 = 35
-		{40, 3, 20},   // 40 - 45 = -5, clamped to 20
-		{120, 6, 20},  // 120 - 90 = 30
+		{0, 10, ""},
+		{0.001, 10, "▏"}, // tiny non-zero shares stay visible
+		{0.5, 10, "█████"},
+		{0.55, 10, "█████▌"},
+		{1, 10, "██████████"},
+		{1.5, 4, "████"},
+	}
+	for _, tt := range tests {
+		got, w := shareBar(tt.frac, tt.width)
+		if got != tt.want || w != utf8.RuneCountInString(tt.want) {
+			t.Errorf("shareBar(%v, %d) = %q (%d), want %q", tt.frac, tt.width, got, w, tt.want)
+		}
+	}
+}
+
+func TestWriteTable_FitsWidth(t *testing.T) {
+	long := filepath.FromSlash("services/payments/internal/handlers/refunds/refund.go")
+	sec := section{
+		header:  []string{"Rank", "Directory", "Files", "Lines", "Share"},
+		left:    []int{1},
+		pathCol: 1,
+		ranked:  true,
+		rows: [][]any{
+			{1, long, 12, 34567, percent(61.6)},
+			{2, "cmd/", 2, 300, percent(0.5)},
+		},
 	}
 
-	for _, tt := range tests {
-		got := computeMaxPathWidth(tt.termWidth, tt.numOtherCols)
-		if got < tt.minExpected {
-			t.Errorf("computeMaxPathWidth(%d, %d) = %d, expected >= %d",
-				tt.termWidth, tt.numOtherCols, got, tt.minExpected)
+	for _, width := range []int{60, 80, 120} {
+		var buf bytes.Buffer
+		writeTable(&buf, style(false), sec, width)
+		out := buf.String()
+		if strings.Contains(out, "\x1b[") {
+			t.Fatal("unexpected ANSI codes with colour disabled")
 		}
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			if w := runewidth.StringWidth(line); w > width {
+				t.Errorf("width %d: line is %d wide: %q", width, w, line)
+			}
+		}
+		if !strings.Contains(out, "refund.go") || !strings.Contains(out, "34,567") || !strings.Contains(out, " 61.6% ") {
+			t.Errorf("width %d: missing expected content:\n%s", width, out)
+		}
+	}
+
+	var buf bytes.Buffer
+	writeTable(&buf, style(true), sec, 80)
+	if !strings.Contains(buf.String(), "\x1b[") {
+		t.Error("expected ANSI codes with colour enabled")
 	}
 }
 
